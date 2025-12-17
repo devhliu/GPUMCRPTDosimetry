@@ -1,0 +1,73 @@
+# Simple Materials Table for Testing
+# Minimal materials table for quick testing and validation
+
+name: "simple_test"
+description: "Simple materials table for testing and validation"
+source: "Test/Validation"
+is_default: false
+
+# Simplified HU to density mapping
+hu_to_density:
+  - [-1000, 0.0012]   # Air
+  - [-500, 0.30]      # Lung
+  - [-100, 0.95]      # Fat
+  - [0, 1.00]         # Water/Soft Tissue
+  - [100, 1.50]       # Bone
+
+# Simplified material classes
+hu_to_class:
+  - [-1000, -500, 0]   # air
+  - [-500, -100, 1]    # lung
+  - [-100, 0, 2]       # fat
+  - [0, 100, 3]        # soft_tissue
+  - [100, 3000, 4]     # bone
+
+# Simplified material library
+material_library:
+  elements: ["H", "C", "N", "O", "Ca"]
+  
+  materials:
+    - name: "air"
+      ref_density_g_cm3: 0.0012
+      wfrac:
+        H: 0.0
+        C: 0.0
+        N: 0.78
+        O: 0.22
+        Ca: 0.0
+    
+    - name: "lung"
+      ref_density_g_cm3: 0.30
+      wfrac:
+        H: 0.10
+        C: 0.10
+        N: 0.03
+        O: 0.77
+        Ca: 0.0
+    
+    - name: "fat"
+      ref_density_g_cm3: 0.95
+      wfrac:
+        H: 0.12
+        C: 0.60
+        N: 0.01
+        O: 0.27
+        Ca: 0.0
+    
+    - name: "soft_tissue"
+      ref_density_g_cm3: 1.00
+      wfrac:
+        H: 0.11
+        C: 0.0
+        N: 0.0
+        O: 0.89
+        Ca: 0.0
+    
+    - name: "bone"
+      ref_density_g_cm3: 1.50
+      wfrac:
+        H: 0.05
+        C: 0.20
+        N: 0.04
+        O: 0.45
+        Ca: 0.26

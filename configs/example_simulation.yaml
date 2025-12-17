@@ -1,0 +1,79 @@
+device: cuda
+seed: 123
+
+io:
+  resample_ct_to_activity: false
+  output_uncertainty: relative
+
+cutoffs:
+  photon_keV: 3.0
+  electron_keV: 20.0
+
+materials:
+  # Five-compartment model plus bone classes for HU to electron density mapping
+  hu_to_density:
+    - [-1000, 0.0012]   # Air
+    - [-910, 0.205]     # Lung lower bound
+    - [-850, 0.507]     # Lung upper bound  
+    - [-100, 0.95]      # Fat
+    - [0, 1.00]         # Soft Tissue
+    - [10, 1.06]        # Muscle
+    - [150, 1.16]       # Bone lower bound (trabecular)
+    - [3000, 1.85]      # Bone upper bound (cortical)
+  hu_to_class:
+    - [-1000, -850, 0]   # air
+    - [-910, -850, 1]    # lung (corrected range: -910 to -850)
+    - [-100, -50, 2]     # fat
+    - [10, 40, 3]        # muscle
+    - [0, 50, 4]         # soft_tissue
+    - [150, 3000, 5]     # bone
+
+physics_tables:
+  # For bring-up you can generate a toy table via scripts/build_toy_physics_h5.py
+  h5_path: toy_physics.h5
+
+decaydb:
+  type: icrp107_json
+  # Point this to your extracted ICRP107 JSON directory.
+  path: icrp107_json_db
+
+nuclide:
+  name: Lu-177
+
+monte_carlo:
+  n_histories: 5_000_000
+  n_batches: 20
+  max_wavefront_iters: 10_000
+
+  triton:
+    # 'mvp'        = local-deposition bring-up backend (Milestone 1)
+    # 'photon_only' = Woodcock + photon interactions (Milestone 2)
+    # 'em_condensed'= photons + condensed e-/e+ transport + annihilation photons (Milestone 3)
+    engine: mvp
+    use_prefixsum_compaction: true
+    enable_cuda_graphs: true
+
+    # Phase 6 (bucketed CUDA graphs): separate photon/electron graphs
+    graph_bucket_sizes: [4096, 16384, 65536, 262144, 1048576]
+    micro_steps:
+      photons: 2
+      electrons: 2
+      positrons: 2
+
+# Condensed-history charged particle transport (Milestone 3).
+# These settings affect the GPU Triton EM-condensed backend.
+electron_transport:
+  max_steps: 4096
+
+  # Step-size controls (MVP tuning knobs)
+  f_voxel: 0.3
+  f_range: 0.2
+  max_dE_frac: 0.2
+
+  # Secondary spawning controls (bounded recursion)
+  # - Set secondary_depth=0 to disable all brems/delta spawning.
+  # - max_secondaries_per_primary is a hard cap per tracked particle.
+  # - max_secondaries_per_step is an optional throughput limiter.
+  secondary_depth: 1
+  max_secondaries_per_primary: 1000000000
+  max_secondaries_per_step: 1000000000

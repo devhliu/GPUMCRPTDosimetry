@@ -1,0 +1,180 @@
+# Schneider Parameterization Materials Table
+# Based on Schneider et al., Phys Med Biol 2000
+# Continuous parameterization for high-accuracy Monte Carlo simulations
+
+name: "schneider_parameterization"
+description: "Schneider continuous parameterization for high-accuracy Monte Carlo"
+source: "Schneider et al., Phys Med Biol 2000"
+is_default: false
+
+# Schneider uses continuous parameterization, but we provide discrete points
+# for compatibility with the current interpolation system
+hu_to_density:
+  - [-1000, 0.0012]   # Air
+  - [-950, 0.26]      # Lung
+  - [-120, 0.92]      # Adipose (Schneider value)
+  - [-50, 0.99]       # Water-like tissue
+  - [40, 1.04]        # Muscle (Schneider value)
+  - [100, 1.12]       # Trabecular bone start
+  - [300, 1.30]       # Intermediate bone
+  - [600, 1.65]       # Cortical bone start
+  - [1200, 1.85]      # Dense bone
+  - [3000, 1.92]      # Maximum bone density
+
+# Material classes for Schneider parameterization
+hu_to_class:
+  - [-1000, -950, 0]   # air
+  - [-950, -500, 1]    # lung_inflated
+  - [-500, -100, 2]    # lung_exhaled
+  - [-100, -50, 3]     # adipose
+  - [-50, 50, 4]       # water_soft_tissue
+  - [50, 100, 5]       # muscle
+  - [100, 300, 6]      # trabecular_bone_low
+  - [300, 600, 7]      # trabecular_bone_high
+  - [600, 1200, 8]     # cortical_bone_low
+  - [1200, 3000, 9]    # cortical_bone_high
+
+# Schneider parameterization uses more detailed elemental compositions
+material_library:
+  elements: ["H", "C", "N", "O", "Na", "P", "S", "Cl", "K", "Ca"]
+  
+  materials:
+    - name: "air"
+      ref_density_g_cm3: 0.0012
+      wfrac:
+        H: 0.0
+        C: 0.0
+        N: 0.755
+        O: 0.232
+        Na: 0.0
+        P: 0.0
+        S: 0.0
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.0
+    
+    - name: "lung_inflated"
+      ref_density_g_cm3: 0.26
+      wfrac:
+        H: 0.103
+        C: 0.105
+        N: 0.031
+        O: 0.749
+        Na: 0.002
+        P: 0.002
+        S: 0.003
+        Cl: 0.003
+        K: 0.002
+        Ca: 0.0
+    
+    - name: "lung_exhaled"
+      ref_density_g_cm3: 0.50
+      wfrac:
+        H: 0.103
+        C: 0.105
+        N: 0.031
+        O: 0.749
+        Na: 0.002
+        P: 0.002
+        S: 0.003
+        Cl: 0.003
+        K: 0.002
+        Ca: 0.0
+    
+    - name: "adipose"
+      ref_density_g_cm3: 0.92
+      wfrac:
+        H: 0.114
+        C: 0.598
+        N: 0.007
+        O: 0.278
+        Na: 0.001
+        P: 0.0
+        S: 0.001
+        Cl: 0.001
+        K: 0.0
+        Ca: 0.0
+    
+    - name: "water_soft_tissue"
+      ref_density_g_cm3: 0.99
+      wfrac:
+        H: 0.112
+        C: 0.0
+        N: 0.0
+        O: 0.888
+        Na: 0.0
+        P: 0.0
+        S: 0.0
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.0
+    
+    - name: "muscle"
+      ref_density_g_cm3: 1.04
+      wfrac:
+        H: 0.102
+        C: 0.143
+        N: 0.034
+        O: 0.710
+        Na: 0.001
+        P: 0.002
+        S: 0.003
+        Cl: 0.001
+        K: 0.004
+        Ca: 0.0
+    
+    - name: "trabecular_bone_low"
+      ref_density_g_cm3: 1.12
+      wfrac:
+        H: 0.085
+        C: 0.404
+        N: 0.028
+        O: 0.367
+        Na: 0.001
+        P: 0.034
+        S: 0.002
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.078
+    
+    - name: "trabecular_bone_high"
+      ref_density_g_cm3: 1.30
+      wfrac:
+        H: 0.070
+        C: 0.320
+        N: 0.025
+        O: 0.320
+        Na: 0.001
+        P: 0.050
+        S: 0.002
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.210
+    
+    - name: "cortical_bone_low"
+      ref_density_g_cm3: 1.65
+      wfrac:
+        H: 0.050
+        C: 0.220
+        N: 0.030
+        O: 0.360
+        Na: 0.001
+        P: 0.080
+        S: 0.002
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.255
+    
+    - name: "cortical_bone_high"
+      ref_density_g_cm3: 1.92
+      wfrac:
+        H: 0.034
+        C: 0.155
+        N: 0.042
+        O: 0.435
+        Na: 0.001
+        P: 0.103
+        S: 0.003
+        Cl: 0.0
+        K: 0.0
+        Ca: 0.225

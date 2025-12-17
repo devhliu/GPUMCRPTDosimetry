@@ -1,0 +1,111 @@
+# Default HU Materials Table based on ICRU-44 and ICRP-110 standards
+# This is the default materials table for the GPUMCRPTDosimetry package
+
+name: "default_icru44"
+description: "Standard ICRU-44 based materials table with bone differentiation"
+source: "ICRU-44/ICRP-110"
+is_default: true
+
+# HU to density mapping (linear interpolation between points)
+hu_to_density:
+  - [-1000, 0.0012]   # Air
+  - [-950, 0.26]      # Lung (average)
+  - [-120, 0.95]      # Adipose/Fat
+  - [-50, 1.00]       # Soft Tissue/Water
+  - [40, 1.05]        # Muscle
+  - [100, 1.10]       # Trabecular Bone lower
+  - [600, 1.20]       # Trabecular Bone upper
+  - [600, 1.85]       # Cortical Bone lower
+  - [3000, 1.92]      # Cortical Bone upper
+
+# HU to material class mapping [HU_low, HU_high, material_id]
+hu_to_class:
+  - [-1000, -950, 0]   # air
+  - [-950, -400, 1]    # lung
+  - [-120, -50, 2]     # adipose_fat
+  - [-50, 40, 3]       # soft_tissue
+  - [40, 80, 4]        # muscle
+  - [100, 600, 5]      # trabecular_bone
+  - [600, 3000, 6]     # cortical_bone
+
+# Material library configuration
+material_library:
+  elements: ["H", "C", "N", "O", "P", "Ca", "Ar"]
+  
+  materials:
+    - name: "air"
+      ref_density_g_cm3: 0.0012
+      wfrac:
+        H: 0.0
+        C: 0.0
+        N: 0.755
+        O: 0.232
+        P: 0.0
+        Ca: 0.0
+        Ar: 0.013
+    
+    - name: "lung"
+      ref_density_g_cm3: 0.26
+      wfrac:
+        H: 0.103
+        C: 0.105
+        N: 0.031
+        O: 0.749
+        P: 0.002
+        Ca: 0.0
+        Ar: 0.0
+    
+    - name: "adipose_fat"
+      ref_density_g_cm3: 0.95
+      wfrac:
+        H: 0.114
+        C: 0.598
+        N: 0.007
+        O: 0.278
+        P: 0.0
+        Ca: 0.0
+        Ar: 0.0
+    
+    - name: "soft_tissue"
+      ref_density_g_cm3: 1.00
+      wfrac:
+        H: 0.112
+        C: 0.0
+        N: 0.0
+        O: 0.888
+        P: 0.0
+        Ca: 0.0
+        Ar: 0.0
+    
+    - name: "muscle"
+      ref_density_g_cm3: 1.05
+      wfrac:
+        H: 0.102
+        C: 0.143
+        N: 0.034
+        O: 0.710
+        P: 0.002
+        Ca: 0.0
+        Ar: 0.0
+    
+    - name: "trabecular_bone"
+      ref_density_g_cm3: 1.15
+      wfrac:
+        H: 0.085
+        C: 0.404
+        N: 0.028
+        O: 0.367
+        P: 0.034
+        Ca: 0.078
+        Ar: 0.0
+    
+    - name: "cortical_bone"
+      ref_density_g_cm3: 1.88
+      wfrac:
+        H: 0.034
+        C: 0.155
+        N: 0.042
+        O: 0.435
+        P: 0.103
+        Ca: 0.225
+        Ar: 0.0
