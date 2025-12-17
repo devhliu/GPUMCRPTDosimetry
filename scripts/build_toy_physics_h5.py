@@ -88,6 +88,9 @@ def main():
     brem_inv_cdf_Efrac = np.tile(np.linspace(0.0, 0.3, K, dtype=np.float32), (E, 1))
     delta_inv_cdf_Efrac = np.tile(np.linspace(0.0, 0.5, K, dtype=np.float32), (E, 1))
 
+    if os.path.exists(args.out):
+        os.remove(args.out)
+
     with h5py.File(args.out, "w") as f:
         meta = f.create_group("meta")
         meta.attrs["schema_version"] = "1.0"
@@ -113,18 +116,6 @@ def main():
         el = f.create_group("electrons")
         el.create_dataset("S_restricted", data=S_restricted)
         el.create_dataset("range_csda_cm", data=range_csda_cm)
-        el.create_dataset("P_brem_per_cm", data=P_brem_per_cm)
-        el.create_dataset("P_delta_per_cm", data=P_delta_per_cm)
-
-        samplers = f.create_group("samplers")
-        se = samplers.create_group("electron")
-        sb = se.create_group("brems")
-        sb.create_dataset("inv_cdf_Efrac", data=brem_inv_cdf_Efrac)
-        sd = se.create_group("delta")
-        sd.create_dataset("inv_cdf_Efrac", data=delta_inv_cdf_Efrac)
-        el.create_dataset("P_brem_per_cm", data=P_brem_per_cm)
-        el.create_dataset("P_delta_per_cm", data=P_delta_per_cm)
-
         samplers = f.create_group("samplers")
         el_s = samplers.create_group("electron")
         brem = el_s.create_group("brems")

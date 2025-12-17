@@ -24,7 +24,7 @@ def rand_uniform_u01(state: tl.tensor) -> tuple[tl.tensor, tl.tensor]:
     """
     new_state = xorshift32(state)
     # convert uint32 -> float in (0,1)
-    u = tl.view(new_state, tl.uint32).to(tl.float32) * (1.0 / 4294967296.0)
+    u = new_state.to(tl.uint32).to(tl.float32) * (1.0 / 4294967296.0)
     # avoid exact 0
     u = tl.maximum(u, 1e-12)
     return u, new_state

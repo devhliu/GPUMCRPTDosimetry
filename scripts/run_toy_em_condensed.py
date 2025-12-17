@@ -79,7 +79,7 @@ def main() -> None:
     sim_config = {
         "seed": args.seed,
         "cutoffs": {"photon_keV": 3.0, "electron_keV": 20.0},
-        "monte_carlo": {"max_wavefront_iters": 4096},
+        "monte_carlo": {"max_wavefront_iters": 4096, "triton": {"allow_placeholder_samplers": True}},
         "electron_transport": {"f_voxel": 0.3, "f_range": 0.2, "max_dE_frac": 0.2, "max_steps": 4096},
     }
 

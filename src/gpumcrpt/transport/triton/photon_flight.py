@@ -44,27 +44,13 @@ def photon_woodcock_flight_kernel(
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < N
 
-    # Create block pointers for efficient memory access
-    pos_block = tl.make_block_ptr(
-        base=pos_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    dir_block = tl.make_block_ptr(
-        base=dir_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    
-    # Load particle data using block pointers with cache hints
-    pos_data = tl.load(pos_block, boundary_check=(0, 1), mask=mask, other=0.0, cache_modifier=".cg")
-    dir_data = tl.load(dir_block, boundary_check=(0, 1), mask=mask, other=0.0, cache_modifier=".cg")
-    
-    z = pos_data[:, 0]
-    y = pos_data[:, 1]
-    x = pos_data[:, 2]
-    
-    uz = dir_data[:, 0]
-    uy = dir_data[:, 1]
-    ux = dir_data[:, 2]
+    z = tl.load(pos_ptr + offs * 3 + 0, mask=mask, other=0.0, cache_modifier=".cg")
+    y = tl.load(pos_ptr + offs * 3 + 1, mask=mask, other=0.0, cache_modifier=".cg")
+    x = tl.load(pos_ptr + offs * 3 + 2, mask=mask, other=0.0, cache_modifier=".cg")
+
+    uz = tl.load(dir_ptr + offs * 3 + 0, mask=mask, other=0.0, cache_modifier=".cg")
+    uy = tl.load(dir_ptr + offs * 3 + 1, mask=mask, other=0.0, cache_modifier=".cg")
+    ux = tl.load(dir_ptr + offs * 3 + 2, mask=mask, other=0.0, cache_modifier=".cg")
 
     # Load scalar data with cache hints
     E = tl.load(E_ptr + offs, mask=mask, other=0.0, cache_modifier=".cg")
@@ -74,12 +60,7 @@ def photon_woodcock_flight_kernel(
     ebin = tl.load(ebin_ptr + offs, mask=mask, other=0, cache_modifier=".cg").to(tl.int32)
     ebin = tl.maximum(0, tl.minimum(ebin, ECOUNT - 1))
 
-    # Load sigma_max using block pointer for better cache utilization
-    sigma_max_block = tl.make_block_ptr(
-        base=sigma_max_ptr, shape=(ECOUNT,), strides=(1,), offsets=(0,),
-        block_shape=(BLOCK_SIZE,), order=(0,)
-    )
-    sigma_max = tl.load(sigma_max_block, boundary_check=(0,), mask=mask, other=1e-3, cache_modifier=".ca")
+    sigma_max = tl.load(sigma_max_ptr + ebin, mask=mask, other=1e-3, cache_modifier=".ca")
 
     u1, rng = rand_uniform_u01(rng)
     s = -tl.log(u1) / tl.maximum(sigma_max, 1e-12)
@@ -114,28 +95,13 @@ def photon_woodcock_flight_kernel(
     real = accept & inside
     alive = inside
 
-    # Store results using block pointers for efficient writes
-    out_pos_data = tl.zeros((BLOCK_SIZE, 3), dtype=tl.float32)
-    out_pos_data[:, 0] = z2
-    out_pos_data[:, 1] = y2
-    out_pos_data[:, 2] = x2
-    
-    out_pos_block = tl.make_block_ptr(
-        base=out_pos_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    tl.store(out_pos_block, out_pos_data, boundary_check=(0, 1), mask=mask)
+    tl.store(out_pos_ptr + offs * 3 + 0, z2, mask=mask)
+    tl.store(out_pos_ptr + offs * 3 + 1, y2, mask=mask)
+    tl.store(out_pos_ptr + offs * 3 + 2, x2, mask=mask)
 
-    out_dir_data = tl.zeros((BLOCK_SIZE, 3), dtype=tl.float32)
-    out_dir_data[:, 0] = uz
-    out_dir_data[:, 1] = uy
-    out_dir_data[:, 2] = ux
-    
-    out_dir_block = tl.make_block_ptr(
-        base=out_dir_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    tl.store(out_dir_block, out_dir_data, boundary_check=(0, 1), mask=mask)
+    tl.store(out_dir_ptr + offs * 3 + 0, uz, mask=mask)
+    tl.store(out_dir_ptr + offs * 3 + 1, uy, mask=mask)
+    tl.store(out_dir_ptr + offs * 3 + 2, ux, mask=mask)
 
     # Store scalar outputs
     tl.store(out_E_ptr + offs, E, mask=mask)
