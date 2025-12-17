@@ -97,7 +97,7 @@ def sample_weighted_decays_and_primaries(
         def deposit_at_histories(E_MeV: torch.Tensor, hist_idx: torch.Tensor) -> None:
             if E_MeV.numel() == 0:
                 return
-            local_edep.view(-1).index_add_(0, lin[hist_idx], (E_MeV * w_hist[hist_idx]).to(torch.float32))
+            local_edep.reshape(-1).index_add_(0, lin[hist_idx], (E_MeV * w_hist[hist_idx]).to(torch.float32))
 
         def _empty_queue() -> Dict[str, torch.Tensor]:
             return {

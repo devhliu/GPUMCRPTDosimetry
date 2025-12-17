@@ -33,7 +33,7 @@ physics_tables:
 
 decaydb:
   type: icrp107_json
-  path: ../src/gpumcrpt/decaydb/icrp107_database/icrp107
+  path: src/gpumcrpt/decaydb/icrp107_database/icrp107
 
 nuclide:
   name: Lu-177

@@ -44,23 +44,23 @@ def photon_woodcock_flight_kernel(
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offs < N
 
-    z = tl.load(pos_ptr + offs * 3 + 0, mask=mask, other=0.0, cache_modifier=".cg")
-    y = tl.load(pos_ptr + offs * 3 + 1, mask=mask, other=0.0, cache_modifier=".cg")
-    x = tl.load(pos_ptr + offs * 3 + 2, mask=mask, other=0.0, cache_modifier=".cg")
+    z = tl.load(pos_ptr + offs * 3 + 0, mask=mask, other=0.0)
+    y = tl.load(pos_ptr + offs * 3 + 1, mask=mask, other=0.0)
+    x = tl.load(pos_ptr + offs * 3 + 2, mask=mask, other=0.0)
 
-    uz = tl.load(dir_ptr + offs * 3 + 0, mask=mask, other=0.0, cache_modifier=".cg")
-    uy = tl.load(dir_ptr + offs * 3 + 1, mask=mask, other=0.0, cache_modifier=".cg")
-    ux = tl.load(dir_ptr + offs * 3 + 2, mask=mask, other=0.0, cache_modifier=".cg")
+    uz = tl.load(dir_ptr + offs * 3 + 0, mask=mask, other=0.0)
+    uy = tl.load(dir_ptr + offs * 3 + 1, mask=mask, other=0.0)
+    ux = tl.load(dir_ptr + offs * 3 + 2, mask=mask, other=0.0)
 
-    # Load scalar data with cache hints
-    E = tl.load(E_ptr + offs, mask=mask, other=0.0, cache_modifier=".cg")
-    w = tl.load(w_ptr + offs, mask=mask, other=0.0, cache_modifier=".cg")
-    rng = tl.load(rng_ptr + offs, mask=mask, other=123456789, cache_modifier=".cg")
+    # Load scalar data
+    E = tl.load(E_ptr + offs, mask=mask, other=0.0)
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0)
+    rng = tl.load(rng_ptr + offs, mask=mask, other=123456789)
 
-    ebin = tl.load(ebin_ptr + offs, mask=mask, other=0, cache_modifier=".cg").to(tl.int32)
+    ebin = tl.load(ebin_ptr + offs, mask=mask, other=0).to(tl.int32)
     ebin = tl.maximum(0, tl.minimum(ebin, ECOUNT - 1))
 
-    sigma_max = tl.load(sigma_max_ptr + ebin, mask=mask, other=1e-3, cache_modifier=".ca")
+    sigma_max = tl.load(sigma_max_ptr + ebin, mask=mask, other=1e-3)
 
     u1, rng = rand_uniform_u01(rng)
     s = -tl.log(u1) / tl.maximum(sigma_max, 1e-12)
@@ -78,17 +78,17 @@ def photon_woodcock_flight_kernel(
     inside = (iz >= 0) & (iz < Z) & (iy >= 0) & (iy < Y) & (ix >= 0) & (ix < X)
     lin = iz * (Y * X) + iy * X + ix
 
-    # Load material data with cache hints
-    mat = tl.load(material_id_ptr + lin, mask=inside & mask, other=0, cache_modifier=".cg").to(tl.int32)
+    # Load material data
+    mat = tl.load(material_id_ptr + lin, mask=inside & mask, other=0).to(tl.int32)
     mat = tl.maximum(0, tl.minimum(mat, M - 1))
 
-    rho = tl.load(rho_ptr + lin, mask=inside & mask, other=1e-3, cache_modifier=".cg").to(tl.float32)
-    rho_ref = tl.load(ref_rho_ptr + mat, mask=inside & mask, other=1.0, cache_modifier=".ca").to(tl.float32)
+    rho = tl.load(rho_ptr + lin, mask=inside & mask, other=1e-3).to(tl.float32)
+    rho_ref = tl.load(ref_rho_ptr + mat, mask=inside & mask, other=1.0).to(tl.float32)
     rho_scale = rho / tl.maximum(rho_ref, 1e-6)
 
     # Load sigma_total using efficient indexing
     xs_off = mat * ECOUNT + ebin
-    sigma_tot = tl.load(sigma_total_ptr + xs_off, mask=inside & mask, other=0.0, cache_modifier=".ca") * rho_scale
+    sigma_tot = tl.load(sigma_total_ptr + xs_off, mask=inside & mask, other=0.0) * rho_scale
 
     u2, rng = rand_uniform_u01(rng)
     accept = u2 < (sigma_tot / tl.maximum(sigma_max, 1e-12))

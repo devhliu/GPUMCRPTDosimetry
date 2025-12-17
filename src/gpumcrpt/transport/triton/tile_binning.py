@@ -34,13 +34,13 @@ def scatter_by_tile_kernel(
     m = offs < n
 
     # Load input data with cache hints
-    tile = tl.load(tile_ptr + offs, mask=m, other=-1, cache_modifier=".cg").to(tl.int32)
-    lin = tl.load(lin_ptr + offs, mask=m, other=-1, cache_modifier=".cg").to(tl.int32)
-    val = tl.load(val_ptr + offs, mask=m, other=0.0, cache_modifier=".cg").to(tl.float32)
+    tile = tl.load(tile_ptr + offs, mask=m, other=-1).to(tl.int32)
+    lin = tl.load(lin_ptr + offs, mask=m, other=-1).to(tl.int32)
+    val = tl.load(val_ptr + offs, mask=m, other=0.0).to(tl.float32)
 
     good = tile >= 0
     pos = tl.atomic_add(cursor_ptr + tile, 1, mask=good)
     
     # Store output data with cache hints
-    tl.store(out_lin_ptr + pos, lin, mask=good, cache_modifier=".cg")
-    tl.store(out_val_ptr + pos, val, mask=good, cache_modifier=".cg")
+    tl.store(out_lin_ptr + pos, lin, mask=good)
+    tl.store(out_val_ptr + pos, val, mask=good)

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 import triton
 
+from gpumcrpt.materials.hu_materials import compute_material_effective_atom_Z
 from gpumcrpt.transport.secondary_budget import allow_secondaries, select_indices_with_budget
 from gpumcrpt.transport.triton.brems_delta import electron_brems_emit_kernel, electron_delta_emit_kernel
 from gpumcrpt.transport.triton.compton import photon_compton_kernel
@@ -784,132 +785,140 @@ class TritonEMCondensedTransportEngine:
                 break
 
             ebin = torch.bucketize(E, self.tables.e_edges_MeV) - 1
-            ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
+        ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
 
-            electron_condensed_step_kernel[grid](
-                pos, direction, E, w, rng, ebin,
-                material_id, rho, self.tables.ref_density_g_cm3,
-                self.tables.S_restricted, self.tables.range_csda_cm,
-                P_brem, P_delta,
-                edep_flat,
-                pos2, dir2, E2, w2, rng2, ebin2,
-                alive, emit_b, emit_d,
-                Z=Z, Y=Y, X=X,
-                M=M, ECOUNT=ECOUNT,
-                BLOCK=256,
-                voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-                f_vox=f_vox, f_range=f_range, max_dE_frac=max_dE_frac,
-                num_warps=4,
+        # Calculate effective atomic numbers for materials
+        if self.mats.lib is not None:
+            Z_material = compute_material_effective_atom_Z(self.mats.lib)
+        else:
+            # Fallback: use material ID as atomic number (for testing)
+            Z_material = torch.arange(M, device=self.device, dtype=torch.int32) + 1
+
+        electron_condensed_step_kernel[grid](
+            pos, direction, E, w, rng, ebin,
+            material_id, rho, self.tables.ref_density_g_cm3,
+            self.tables.S_restricted, self.tables.range_csda_cm,
+            P_brem, P_delta,
+            Z_material,  # Atomic numbers for materials
+            edep_flat,
+            pos2, dir2, E2, w2, rng2, ebin2,
+            alive, emit_b, emit_d,
+            Z=Z, Y=Y, X=X,
+            M=M, ECOUNT=ECOUNT,
+            N=N,  # number of particles
+            voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
+            f_vox=f_vox, f_range=f_range, max_dE_frac=max_dE_frac,
+            BLOCK_SIZE_KERNEL=256,
+        )
+
+        if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
+            # Brems photons
+            bmask = emit_b.to(torch.bool) & (E2 > 0) & (w2 > 0)
+            idx = select_indices_with_budget(
+                bmask,
+                sec_counts,
+                max_per_primary=max_secondaries_per_primary,
+                max_per_step=max_secondaries_per_step,
             )
+            if int(idx.numel()) > 0:
+                ns = int(idx.numel())
+                n_brems += ns
 
-            if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
-                # Brems photons
-                bmask = emit_b.to(torch.bool) & (E2 > 0) & (w2 > 0)
-                idx = select_indices_with_budget(
-                    bmask,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
+                s_pos = pos2.index_select(0, idx)
+                s_dir = dir2.index_select(0, idx)
+                s_E = E2.index_select(0, idx)
+                s_w = w2.index_select(0, idx)
+                s_rng = rng2.index_select(0, idx)
+                s_ebin = ebin2.index_select(0, idx)
+
+                out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
+                out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
+                ph_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
+                ph_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
+                ph_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
+                ph_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
+
+                g2 = (triton.cdiv(ns, 256),)
+                electron_brems_emit_kernel[g2](
+                    s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
+                    brem_inv_cdf, K_brem,
+                    out_parent_E, out_rng,
+                    ph_pos, ph_dir, ph_E, ph_w,
+                    ECOUNT=ECOUNT,
+                    BLOCK=256,
+                    num_warps=4,
                 )
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    n_brems += ns
 
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
+                E2.index_copy_(0, idx, out_parent_E)
+                rng2.index_copy_(0, idx, out_rng)
 
-                    out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                    ph_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    ph_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    ph_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    ph_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                    g2 = (triton.cdiv(ns, 256),)
-                    electron_brems_emit_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        brem_inv_cdf, K_brem,
-                        out_parent_E, out_rng,
-                        ph_pos, ph_dir, ph_E, ph_w,
-                        ECOUNT=ECOUNT,
-                        BLOCK=256,
-                        num_warps=4,
-                    )
-
-                    E2.index_copy_(0, idx, out_parent_E)
-                    rng2.index_copy_(0, idx, out_rng)
-
-                    escaped_brems += self._run_photons_inplace(
-                        pos=ph_pos,
-                        direction=ph_dir,
-                        E=ph_E,
-                        w=ph_w,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-
-                # Delta electrons (transport as condensed electrons; bounded recursion)
-                dmask = emit_d.to(torch.bool) & (E2 > 0) & (w2 > 0)
-                idx = select_indices_with_budget(
-                    dmask,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
+                escaped_brems += self._run_photons_inplace(
+                    pos=ph_pos,
+                    direction=ph_dir,
+                    E=ph_E,
+                    w=ph_w,
+                    edep=edep,
+                    secondary_depth=secondary_depth - 1,
+                    max_secondaries_per_primary=max_secondaries_per_primary,
+                    max_secondaries_per_step=max_secondaries_per_step,
                 )
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    n_delta += ns
 
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
+            # Delta electrons (transport as condensed electrons; bounded recursion)
+            dmask = emit_d.to(torch.bool) & (E2 > 0) & (w2 > 0)
+            idx = select_indices_with_budget(
+                dmask,
+                sec_counts,
+                max_per_primary=max_secondaries_per_primary,
+                max_per_step=max_secondaries_per_step,
+            )
+            if int(idx.numel()) > 0:
+                ns = int(idx.numel())
+                n_delta += ns
 
-                    out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                    de_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    de_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    de_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    de_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
+                s_pos = pos2.index_select(0, idx)
+                s_dir = dir2.index_select(0, idx)
+                s_E = E2.index_select(0, idx)
+                s_w = w2.index_select(0, idx)
+                s_rng = rng2.index_select(0, idx)
+                s_ebin = ebin2.index_select(0, idx)
 
-                    g2 = (triton.cdiv(ns, 256),)
-                    electron_delta_emit_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        delta_inv_cdf, K_delta,
-                        out_parent_E, out_rng,
-                        de_pos, de_dir, de_E, de_w,
-                        ECOUNT=ECOUNT,
-                        BLOCK=256,
-                        num_warps=4,
-                    )
+                out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
+                out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
+                de_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
+                de_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
+                de_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
+                de_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
 
-                    E2.index_copy_(0, idx, out_parent_E)
-                    rng2.index_copy_(0, idx, out_rng)
+                g2 = (triton.cdiv(ns, 256),)
+                electron_delta_emit_kernel[g2](
+                    s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
+                    delta_inv_cdf, K_delta,
+                    out_parent_E, out_rng,
+                    de_pos, de_dir, de_E, de_w,
+                    ECOUNT=ECOUNT,
+                    BLOCK=256,
+                    num_warps=4,
+                )
 
-                    # Transport delta electrons (bounded recursion)
-                    esc2, nb2, nd2 = self._run_electrons_inplace(
-                        pos=de_pos,
-                        direction=de_dir,
-                        E=de_E,
-                        w=de_w,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-                    escaped_brems += esc2
-                    n_brems += nb2
-                    n_delta += nd2
+                E2.index_copy_(0, idx, out_parent_E)
+                rng2.index_copy_(0, idx, out_rng)
 
-            pos, direction, E, w, rng = pos2, dir2, E2, w2, rng2
+                # Transport delta electrons (bounded recursion)
+                esc2, nb2, nd2 = self._run_electrons_inplace(
+                    pos=de_pos,
+                    direction=de_dir,
+                    E=de_E,
+                    w=de_w,
+                    edep=edep,
+                    secondary_depth=secondary_depth - 1,
+                    max_secondaries_per_primary=max_secondaries_per_primary,
+                    max_secondaries_per_step=max_secondaries_per_step,
+                )
+                escaped_brems += esc2
+                n_brems += nb2
+                n_delta += nd2
+
+        pos, direction, E, w, rng = pos2, dir2, E2, w2, rng2
 
         return float(escaped_brems), int(n_brems), int(n_delta)
 

@@ -29,18 +29,19 @@ def sample_multiple_scattering_angle(u1: tl.float32, u2: tl.float32, step_length
     
     # Calculate relativistic parameters
     total_energy = E_MeV + electron_rest_mass_MeV
-    beta_sq = tl.maximum(0.0, 1.0 - (electron_rest_mass_MeV / total_energy) ** 2)
+    ratio = electron_rest_mass_MeV / total_energy
+    beta_sq = tl.maximum(0.0, 1.0 - ratio * ratio)  # Use multiplication for squaring
     beta = tl.sqrt(beta_sq)
-    p_MeV_c = tl.sqrt(tl.maximum(0.0, total_energy ** 2 - electron_rest_mass_MeV ** 2))
+    p_MeV_c = tl.sqrt(tl.maximum(0.0, total_energy * total_energy - electron_rest_mass_MeV * electron_rest_mass_MeV))
     
     # Use optimized approximation for characteristic angle
     # Simplified formula based on Highland's extension
-    Z_float = tl.float32(Z_material)
+    Z_float = Z_material.to(tl.float32)
     
     # Highland's formula approximation for RMS scattering angle
     # θ_0 ≈ (13.6 MeV / (β p c)) * sqrt(step_length/X0) * (1 + 0.038 * ln(step_length/X0))
     # Simplified for performance while maintaining accuracy
-    X0_approx = 716.4 * tl.float32(Z_material) / (Z_float * (Z_float + 1.0) * tl.log(287.0 / tl.sqrt(Z_float)))
+    X0_approx = 716.4 * Z_float / (Z_float * (Z_float + 1.0) * tl.log(287.0 / tl.sqrt(Z_float)))
     
     # Calculate characteristic angle using optimized formula
     step_length_rad_lengths = step_length_cm / X0_approx
@@ -98,16 +99,6 @@ def rotate_vector_around_axis(ux: tl.float32, uy: tl.float32, uz: tl.float32,
     return ux_rot, uy_rot, uz_rot
 
 
-# Autotuning configurations for RTX A4000 (Ampere architecture)
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 2}, num_stages=4),
-        triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4}, num_stages=3),
-        triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4}, num_stages=2),
-        triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8}, num_stages=1),
-    ],
-    key=['N'],  # Tune based on problem size
-)
 @triton.jit
 def electron_condensed_step_kernel(
     pos_ptr, dir_ptr, E_ptr, w_ptr, rng_ptr, ebin_ptr,
@@ -121,10 +112,9 @@ def electron_condensed_step_kernel(
     Z: tl.constexpr, Y: tl.constexpr, X: tl.constexpr,
     M: tl.constexpr, ECOUNT: tl.constexpr,
     N: tl.constexpr,  # number of particles
-    BLOCK_SIZE: tl.constexpr,  # Autotuned block size
-    NUM_WARPS: tl.constexpr,  # Autotuned warp count
     voxel_z_cm: tl.constexpr, voxel_y_cm: tl.constexpr, voxel_x_cm: tl.constexpr,
     f_vox: tl.constexpr, f_range: tl.constexpr, max_dE_frac: tl.constexpr,
+    BLOCK_SIZE_KERNEL: tl.constexpr = 256,  # Compile-time constant for block size
 ):
     """
     Optimized Condensed-history electron step using Triton 3.5.1 features:
@@ -134,36 +124,26 @@ def electron_condensed_step_kernel(
     - Implicit boundary checking
     """
     pid = tl.program_id(0)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs = pid * BLOCK_SIZE_KERNEL + tl.arange(0, BLOCK_SIZE_KERNEL)
     mask = offs < N
 
-    # Create block pointers for efficient memory access
-    pos_block = tl.make_block_ptr(
-        base=pos_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    dir_block = tl.make_block_ptr(
-        base=dir_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
+    # Load particle data using regular pointer arithmetic for Triton 3.5.1 compatibility
+    # Position and direction are stored as (N, 3) arrays with stride 3
+    pos_offs = offs * 3
+    dir_offs = offs * 3
     
-    # Load particle data using block pointers with cache hints
-    pos_data = tl.load(pos_block, boundary_check=(0, 1), mask=mask, other=0.0, cache_modifier=".cg")
-    dir_data = tl.load(dir_block, boundary_check=(0, 1), mask=mask, other=0.0, cache_modifier=".cg")
-    
-    # Extract position and direction components
-    z = pos_data[:, 0]
-    y = pos_data[:, 1]
-    x = pos_data[:, 2]
-    uz = dir_data[:, 0]
-    uy = dir_data[:, 1]
-    ux = dir_data[:, 2]
+    z = tl.load(pos_ptr + pos_offs + 0, mask=mask, other=0.0)
+    y = tl.load(pos_ptr + pos_offs + 1, mask=mask, other=0.0)
+    x = tl.load(pos_ptr + pos_offs + 2, mask=mask, other=0.0)
+    uz = tl.load(dir_ptr + dir_offs + 0, mask=mask, other=0.0)
+    uy = tl.load(dir_ptr + dir_offs + 1, mask=mask, other=0.0)
+    ux = tl.load(dir_ptr + dir_offs + 2, mask=mask, other=0.0)
 
     # Load other particle properties with cache hints
-    E = tl.load(E_ptr + offs, mask=mask, other=0.0, cache_modifier=".cg")
-    w = tl.load(w_ptr + offs, mask=mask, other=0.0, cache_modifier=".cg")
-    rng = tl.load(rng_ptr + offs, mask=mask, other=123456789, cache_modifier=".cg")
-    ebin = tl.load(ebin_ptr + offs, mask=mask, other=0, cache_modifier=".cg").to(tl.int32)
+    E = tl.load(E_ptr + offs, mask=mask, other=0.0)
+    w = tl.load(w_ptr + offs, mask=mask, other=0.0)
+    rng = tl.load(rng_ptr + offs, mask=mask, other=123456789)
+    ebin = tl.load(ebin_ptr + offs, mask=mask, other=0).to(tl.int32)
     ebin = tl.maximum(0, tl.minimum(ebin, ECOUNT - 1))
 
     iz = tl.floor(z / voxel_z_cm).to(tl.int32)
@@ -217,11 +197,11 @@ def electron_condensed_step_kernel(
     
     # If direction is close to x-axis, use different reference
     dot_ref = ux * ref_x + uy * ref_y + uz * ref_z
-    if tl.abs(dot_ref) > 0.9:
-        ref_x = 0.0
-        ref_y = 1.0
-        ref_z = 0.0
-        dot_ref = ux * ref_x + uy * ref_y + uz * ref_z
+    # Use tl.where() instead of if statement for tensor operations
+    ref_x = tl.where(tl.abs(dot_ref) > 0.9, 0.0, ref_x)
+    ref_y = tl.where(tl.abs(dot_ref) > 0.9, 1.0, ref_y)
+    ref_z = tl.where(tl.abs(dot_ref) > 0.9, 0.0, ref_z)
+    dot_ref = ux * ref_x + uy * ref_y + uz * ref_z
     
     # Calculate rotation axis (cross product of reference and direction)
     axis_x = ref_y * uz - ref_z * uy
@@ -245,11 +225,11 @@ def electron_condensed_step_kernel(
     # Find a vector perpendicular to the scattered direction for azimuthal rotation
     # Use the same axis calculation but with the scattered direction
     dot_ref_scat = ux_scattered * ref_x + uy_scattered * ref_y + uz_scattered * ref_z
-    if tl.abs(dot_ref_scat) > 0.9:
-        ref_x = 0.0
-        ref_y = 1.0
-        ref_z = 0.0
-        dot_ref_scat = ux_scattered * ref_x + uy_scattered * ref_y + uz_scattered * ref_z
+    # Use tl.where() instead of if statement for tensor operations
+    ref_x = tl.where(tl.abs(dot_ref_scat) > 0.9, 0.0, ref_x)
+    ref_y = tl.where(tl.abs(dot_ref_scat) > 0.9, 1.0, ref_y)
+    ref_z = tl.where(tl.abs(dot_ref_scat) > 0.9, 0.0, ref_z)
+    dot_ref_scat = ux_scattered * ref_x + uy_scattered * ref_y + uz_scattered * ref_z
     
     axis_azim_x = ref_y * uz_scattered - ref_z * uy_scattered
     axis_azim_y = ref_z * ux_scattered - ref_x * uz_scattered
@@ -286,36 +266,26 @@ def electron_condensed_step_kernel(
     emit_brem = alive & (u1 < Pb)
     emit_delta = alive & (u2 < Pd)
 
-    # Create output block pointers for efficient memory storage
-    out_pos_block = tl.make_block_ptr(
-        base=out_pos_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
-    out_dir_block = tl.make_block_ptr(
-        base=out_dir_ptr, shape=(N, 3), strides=(3, 1), offsets=(pid * BLOCK_SIZE, 0),
-        block_shape=(BLOCK_SIZE, 3), order=(1, 0)
-    )
+    # Use regular pointer arithmetic for output data (Triton 3.5.1 compatibility)
+    # Position and direction are stored as (N, 3) arrays with stride 3
+    out_pos_offs = offs * 3
+    out_dir_offs = offs * 3
     
-    # Prepare output data for block storage
-    out_pos_data = tl.zeros((BLOCK_SIZE, 3), dtype=tl.float32)
-    out_dir_data = tl.zeros((BLOCK_SIZE, 3), dtype=tl.float32)
+    # Store position data using regular pointer arithmetic
+    tl.store(out_pos_ptr + out_pos_offs + 0, z2, mask=mask)
+    tl.store(out_pos_ptr + out_pos_offs + 1, y2, mask=mask)
+    tl.store(out_pos_ptr + out_pos_offs + 2, x2, mask=mask)
     
-    out_pos_data[:, 0] = z2
-    out_pos_data[:, 1] = y2
-    out_pos_data[:, 2] = x2
-    out_dir_data[:, 0] = uz_final
-    out_dir_data[:, 1] = uy_final
-    out_dir_data[:, 2] = ux_final
+    # Store direction data using regular pointer arithmetic
+    tl.store(out_dir_ptr + out_dir_offs + 0, uz_final, mask=mask)
+    tl.store(out_dir_ptr + out_dir_offs + 1, uy_final, mask=mask)
+    tl.store(out_dir_ptr + out_dir_offs + 2, ux_final, mask=mask)
     
-    # Write out using block pointers with cache hints
-    tl.store(out_pos_block, out_pos_data, boundary_check=(0, 1), mask=mask, cache_modifier=".cg")
-    tl.store(out_dir_block, out_dir_data, boundary_check=(0, 1), mask=mask, cache_modifier=".cg")
-    
-    tl.store(out_E_ptr + offs, E2, mask=mask, cache_modifier=".cg")
-    tl.store(out_w_ptr + offs, w, mask=mask, cache_modifier=".cg")
-    tl.store(out_rng_ptr + offs, rng, mask=mask, cache_modifier=".cg")
-    tl.store(out_ebin_ptr + offs, ebin, mask=mask, cache_modifier=".cg")
+    tl.store(out_E_ptr + offs, E2, mask=mask)
+    tl.store(out_w_ptr + offs, w, mask=mask)
+    tl.store(out_rng_ptr + offs, rng, mask=mask)
+    tl.store(out_ebin_ptr + offs, ebin, mask=mask)
 
-    tl.store(out_alive_ptr + offs, alive.to(tl.int8), mask=mask, cache_modifier=".cg")
-    tl.store(out_emit_brem_ptr + offs, emit_brem.to(tl.int8), mask=mask, cache_modifier=".cg")
-    tl.store(out_emit_delta_ptr + offs, emit_delta.to(tl.int8), mask=mask, cache_modifier=".cg")
+    tl.store(out_alive_ptr + offs, alive.to(tl.int8), mask=mask)
+    tl.store(out_emit_brem_ptr + offs, emit_brem.to(tl.int8), mask=mask)
+    tl.store(out_emit_delta_ptr + offs, emit_delta.to(tl.int8), mask=mask)

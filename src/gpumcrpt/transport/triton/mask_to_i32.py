@@ -34,9 +34,9 @@ def mask_gt0_to_i32_i8_kernel(
     m = offs < n
 
     # Load input data with cache hints
-    x = tl.load(x_ptr + offs, mask=m, other=0, cache_modifier=".cg").to(tl.int32)
+    x = tl.load(x_ptr + offs, mask=m, other=0).to(tl.int32)
     y = x > 0
     
     # Store output data with cache hints
-    tl.store(out_i32_ptr + offs, y.to(tl.int32), mask=m, cache_modifier=".cg")
-    tl.store(out_i8_ptr + offs, y.to(tl.int8), mask=m, cache_modifier=".cg")
+    tl.store(out_i32_ptr + offs, y.to(tl.int32), mask=m)
+    tl.store(out_i8_ptr + offs, y.to(tl.int8), mask=m)

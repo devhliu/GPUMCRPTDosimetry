@@ -34,13 +34,13 @@ def hist_hashed_bins_kernel(
     m = offs < n
     
     # Load input data with cache hints
-    lin = tl.load(lin_ptr + offs, mask=m, other=-1, cache_modifier=".cg").to(tl.int32)
+    lin = tl.load(lin_ptr + offs, mask=m, other=-1).to(tl.int32)
     good = lin >= 0
     tile = lin >> tile_shift
     b = tile & bin_mask
     
     # Atomic add with cache hint
-    tl.atomic_add(bin_counts_ptr + b, 1, mask=good, cache_modifier=".cg")
+    tl.atomic_add(bin_counts_ptr + b, 1, mask=good)
 
 
 # Autotuning configurations for RTX A4000 (Ampere architecture)
@@ -74,17 +74,17 @@ def scatter_hashed_bins_kernel(
     m = offs < n
 
     # Load input data with cache hints
-    lin = tl.load(lin_ptr + offs, mask=m, other=-1, cache_modifier=".cg").to(tl.int32)
-    val = tl.load(val_ptr + offs, mask=m, other=0.0, cache_modifier=".cg").to(tl.float32)
+    lin = tl.load(lin_ptr + offs, mask=m, other=-1).to(tl.int32)
+    val = tl.load(val_ptr + offs, mask=m, other=0.0).to(tl.float32)
 
     good = lin >= 0
     tile = lin >> tile_shift
     b = tile & bin_mask
 
     # Atomic add and store with cache hints
-    pos = tl.atomic_add(bin_cursor_ptr + b, 1, mask=good, cache_modifier=".cg")
-    tl.store(out_lin_ptr + pos, lin, mask=good, cache_modifier=".cg")
-    tl.store(out_val_ptr + pos, val, mask=good, cache_modifier=".cg")
+    pos = tl.atomic_add(bin_cursor_ptr + b, 1, mask=good)
+    tl.store(out_lin_ptr + pos, lin, mask=good)
+    tl.store(out_val_ptr + pos, val, mask=good)
 
 
 @triton.jit
