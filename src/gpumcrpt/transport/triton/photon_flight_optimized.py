@@ -50,13 +50,11 @@ def photon_woodcock_flight_kernel_optimized(
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     
-    # Note: Prefetching would be implemented here for future Triton versions
-    # if PREFETCH_DISTANCE > 0:
-    #     prefetch_offs = offs + PREFETCH_DISTANCE
-    #     tl.prefetch(pos_ptr + prefetch_offs * 3)
-    #     tl.prefetch(dir_ptr + prefetch_offs * 3)
-    #     tl.prefetch(E_ptr + prefetch_offs)
-    #     tl.prefetch(ebin_ptr + prefetch_offs)
+    # Compiler hints for better optimization
+    offs = tl.max_contiguous(offs, BLOCK)
+    
+    # Note: Prefetching is not supported in Triton 3.5.1
+    # Future versions may support tl.prefetch for better memory access patterns
     
     # Load particle data with coalesced access
     E = tl.load(E_ptr + offs, mask=True, other=0.0)
@@ -73,20 +71,8 @@ def photon_woodcock_flight_kernel_optimized(
     ebin = tl.load(ebin_ptr + offs, mask=True, other=0).to(tl.int32)
     ebin = tl.maximum(0, tl.minimum(ebin, ECOUNT - 1))
     
-    # Note: Shared memory caching would be implemented here for future Triton versions
-    # if USE_SHARED_MEMORY and BLOCK <= 1024:
-    #     # Cache sigma_max in shared memory
-    #     sigma_max_shared = tl.static_shared_memory((ECOUNT,), tl.float32)
-    #     
-    #     # Load table into shared memory (first thread in block)
-    #     if tl.program_id(0) == 0 and tl.arange(0, BLOCK)[0] == 0:
-    #         for i in range(ECOUNT):
-    #             sigma_max_shared[i] = tl.load(sigma_max_ptr + i)
-    #     
-    #     tl.debug_barrier()  # Ensure shared memory is loaded
-    #     sigma_max = sigma_max_shared[ebin]
-    # else:
-    # Direct global memory access
+    # Note: Static shared memory is not supported in Triton 3.5.1
+    # Direct global memory access (optimized with coalesced patterns)
     sigma_max = tl.load(sigma_max_ptr + ebin, mask=True, other=1e-3)
     
     # Generate random numbers using Philox

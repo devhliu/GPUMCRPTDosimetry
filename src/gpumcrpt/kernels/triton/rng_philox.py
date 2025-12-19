@@ -10,7 +10,10 @@ def _mulhi_u32(a: tl.tensor, b: tl.tensor) -> tl.tensor:
 
 
 @triton.jit
-def philox4x32_round(c0, c1, c2, c3, k0, k1):
+def philox4x32_round(
+    c0: tl.tensor, c1: tl.tensor, c2: tl.tensor, c3: tl.tensor,
+    k0: tl.tensor, k1: tl.tensor
+) -> tuple[tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor]:
     M0 = tl.full(c0.shape, 0xD2511F53, tl.uint32)
     M1 = tl.full(c0.shape, 0xCD9E8D57, tl.uint32)
     W0 = tl.full(c0.shape, 0x9E3779B9, tl.uint32)
@@ -32,15 +35,21 @@ def philox4x32_round(c0, c1, c2, c3, k0, k1):
 
 
 @triton.jit
-def philox4x32_10(c0, c1, c2, c3, k0, k1):
+def philox4x32_10(
+    c0: tl.tensor, c1: tl.tensor, c2: tl.tensor, c3: tl.tensor,
+    k0: tl.tensor, k1: tl.tensor
+) -> tuple[tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor]:
     for _ in range(10):
         c0, c1, c2, c3, k0, k1 = philox4x32_round(c0, c1, c2, c3, k0, k1)
-    return c0, c1, c2, c3
+    return c0, c1, c2, c3, k0, k1
 
 
 @triton.jit
-def rng_u01_philox(key0, key1, ctr0, ctr1, ctr2, ctr3):
-    r0, r1, r2, r3 = philox4x32_10(
+def rng_u01_philox(
+    key0: tl.tensor, key1: tl.tensor,
+    ctr0: tl.tensor, ctr1: tl.tensor, ctr2: tl.tensor, ctr3: tl.tensor
+) -> tuple[tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor, tl.tensor]:
+    r0, r1, r2, r3, k0, k1 = philox4x32_10(
         ctr0.to(tl.uint32), ctr1.to(tl.uint32), ctr2.to(tl.uint32), ctr3.to(tl.uint32),
         key0.to(tl.uint32), key1.to(tl.uint32)
     )
