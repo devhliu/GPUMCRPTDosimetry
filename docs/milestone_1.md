@@ -10,7 +10,7 @@ NIfTI I/O: nifti.py
 Dose scoring: scoring.py
 CPU oracle stub: cpu_oracle.py
 Added an MVP transport engine that makes the system runnable immediately:
-engine_gpu_triton_mvp.py
+engine_gpu_triton_localdepositonly.py
 Wired TransportEngine to use it in engine.py
 Note: this MVP engine deposits all particle energy locally (not full transport yet). It’s explicitly a Milestone-1 unblocker.
 Made toy table builder robust when --out is just a filename: build_toy_physics_h5.py

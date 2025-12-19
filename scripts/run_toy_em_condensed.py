@@ -7,7 +7,7 @@ import torch
 from gpumcrpt.materials.hu_materials import MaterialsVolume
 from gpumcrpt.physics.tables import load_physics_tables_h5
 from gpumcrpt.source.sampling import ParticleQueues
-from gpumcrpt.transport.engine_gpu_triton_em_condensed import TritonEMCondensedTransportEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
 
 
 def _rand_unit_dirs(n: int, *, device: str) -> torch.Tensor:
@@ -83,7 +83,7 @@ def main() -> None:
         "electron_transport": {"f_voxel": 0.3, "f_range": 0.2, "max_dE_frac": 0.2, "max_steps": 4096},
     }
 
-    engine = TritonEMCondensedTransportEngine(
+    engine = TritonPhotonEMCondensedHistoryEngine(
         mats=mats,
         tables=tables,
         sim_config=sim_config,

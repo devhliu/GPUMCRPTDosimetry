@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch
 
 
-class TritonTransportEngine:
-    """MVP transport engine (runnable end-to-end).
+class LocalDepositOnlyTransportEngine:
+    """LocalDepositOnly engine (runnable end-to-end).
 
     Current behavior: deposit all particle kinetic energy locally in the voxel where it was born.
 

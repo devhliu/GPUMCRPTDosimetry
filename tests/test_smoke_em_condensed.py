@@ -23,7 +23,7 @@ try:
     from gpumcrpt.materials.hu_materials import MaterialsVolume
     from gpumcrpt.physics.tables import load_physics_tables_h5
     from gpumcrpt.source.sampling import ParticleQueues
-    from gpumcrpt.transport.engine_gpu_triton_em_condensed import TritonEMCondensedTransportEngine
+    from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
     
     print("✓ All imports successful")
     
@@ -92,7 +92,7 @@ try:
     }
     
     # Create engine
-    engine = TritonEMCondensedTransportEngine(
+    engine = TritonPhotonEMCondensedHistoryEngine(
         mats=mats,
         tables=tables,
         sim_config=sim_config,

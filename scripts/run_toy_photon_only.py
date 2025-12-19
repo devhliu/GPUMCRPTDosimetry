@@ -7,7 +7,7 @@ import torch
 from gpumcrpt.materials.hu_materials import MaterialsVolume
 from gpumcrpt.physics.tables import load_physics_tables_h5
 from gpumcrpt.source.sampling import ParticleQueues
-from gpumcrpt.transport.engine_gpu_triton_photon_only import TritonPhotonOnlyTransportEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_only import PhotonOnlyTransportEngine
 
 
 def _rand_unit_dirs(n: int, *, device: str) -> torch.Tensor:
@@ -60,7 +60,7 @@ def main() -> None:
         "monte_carlo": {"max_wavefront_iters": 4096},
     }
 
-    engine = TritonPhotonOnlyTransportEngine(
+    engine = PhotonOnlyTransportEngine(
         mats=mats,
         tables=tables,
         sim_config=sim_config,

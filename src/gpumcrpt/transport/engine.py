@@ -7,9 +7,9 @@ import torch
 from ..materials.hu_materials import MaterialsVolume
 from ..physics.tables import PhysicsTables
 from .cpu_oracle import CPUOracleConfig, run_cpu_oracle_transport
-from .engine_gpu_triton_mvp import TritonTransportEngine
-from .engine_gpu_triton_photon_only import TritonPhotonOnlyTransportEngine
-from .engine_gpu_triton_em_condensed import TritonEMCondensedTransportEngine
+from .engine_gpu_triton_localdepositonly import LocalDepositOnlyTransportEngine
+from .engine_gpu_triton_photon_only import PhotonOnlyTransportEngine
+from .engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
 
 
 @dataclass
@@ -65,25 +65,25 @@ class TransportEngine:
         triton_cfg = self.sim_config.get("monte_carlo", {}).get("triton", {})
         triton_engine = str(triton_cfg.get("engine", "mvp")).lower()
 
-        if triton_engine == "em_condensed":
-            tr_engine = TritonEMCondensedTransportEngine(
+        if triton_engine == "em_condensed" or triton_engine == "photon-em-condensedhistorymultiparticle":
+            tr_engine = TritonPhotonEMCondensedHistoryEngine(
                 mats=self.mats,
                 tables=self.tables,
                 sim_config=self.sim_config,
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine == "photon_only":
-            tr_engine = TritonPhotonOnlyTransportEngine(
+        elif triton_engine == "photon_only" or triton_engine == "photononly":
+            tr_engine = PhotonOnlyTransportEngine(
                 mats=self.mats,
                 tables=self.tables,
                 sim_config=self.sim_config,
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine == "mvp":
-            # MVP engine: local-deposition transport (runnable end-to-end).
-            tr_engine = TritonTransportEngine(
+        elif triton_engine == "mvp" or triton_engine == "localdepositonly":
+            # LocalDepositOnly engine: local-deposition transport (runnable end-to-end).
+            tr_engine = LocalDepositOnlyTransportEngine(
                 mats=self.mats,
                 tables=self.tables,
                 sim_config=self.sim_config,
@@ -92,7 +92,7 @@ class TransportEngine:
             )
         else:
             raise ValueError(
-                f"Unknown monte_carlo.triton.engine={triton_engine!r} (expected 'mvp', 'photon_only', or 'em_condensed')"
+                f"Unknown monte_carlo.triton.engine={triton_engine!r} (expected 'mvp'/'localdepositonly', 'photon_only'/'photononly', or 'em_condensed'/'photon-em-condensedhistorymultiparticle')"
             )
 
         n_ph = int(primaries.photons["E_MeV"].shape[0])

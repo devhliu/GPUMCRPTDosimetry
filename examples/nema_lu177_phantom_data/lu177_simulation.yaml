@@ -1,0 +1,52 @@
+device: cpu
+seed: 123
+
+io:
+  resample_ct_to_activity: false
+  output_uncertainty: relative
+
+cutoffs:
+  photon_keV: 3.0
+  electron_keV: 20.0
+
+materials:
+  # Five-compartment model plus bone classes for HU to electron density mapping
+  hu_to_density:
+    - [-1000, 0.0012]   # Air
+    - [-910, 0.205]     # Lung lower bound
+    - [-850, 0.507]     # Lung upper bound  
+    - [-100, 0.95]      # Fat
+    - [0, 1.00]         # Soft Tissue
+    - [10, 1.06]        # Muscle
+    - [150, 1.16]       # Bone lower bound (trabecular)
+    - [3000, 1.85]      # Bone upper bound (cortical)
+  hu_to_class:
+    - [-1000, -850, 0]   # air
+    - [-910, -850, 1]    # lung (corrected range: -910 to -850)
+    - [-100, -50, 2]     # fat
+    - [10, 40, 3]        # muscle
+    - [0, 50, 4]         # soft_tissue
+    - [150, 3000, 5]     # bone
+
+physics_tables:
+  # Toy physics table generated for quick testing
+  h5_path: toy_physics.h5
+
+decaydb:
+  type: icrp107_json
+  # Point this to the ICRP107 JSON database directory
+  path: ../src/gpumcrpt/decaydb/icrp107_database/icrp107
+
+nuclide:
+  name: Lu-177
+
+monte_carlo:
+  n_histories: 1_000_000
+  n_batches: 20
+  max_wavefront_iters: 10_000
+
+  triton:
+    # 'mvp'        = local-deposition bring-up backend (Milestone 1)
+    # 'photon_only' = Woodcock + photon interactions (Milestone 2)
+    # 'em_condensed' = full EM transport (Milestone 3)
+    engine: mvp

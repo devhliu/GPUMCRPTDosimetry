@@ -17,8 +17,8 @@ class PhotonOnlyStats:
     escaped_energy_MeV: float
 
 
-class TritonPhotonOnlyTransportEngine:
-    """Milestone 2 engine: photon-only transport (GPU/Triton).
+class PhotonOnlyTransportEngine:
+    """PhotonOnly backend: photon-only transport (GPU/Triton).
 
     - Woodcock flight using tables.sigma_total + sigma_max
     - Interaction classification via per-material xs (PE/Compton/Rayleigh/Pair)
@@ -42,7 +42,7 @@ class TritonPhotonOnlyTransportEngine:
         device: str = "cuda",
     ) -> None:
         if device != "cuda" or not torch.cuda.is_available():
-            raise RuntimeError("TritonPhotonOnlyTransportEngine requires CUDA")
+            raise RuntimeError("PhotonOnlyTransportEngine requires CUDA")
 
         self.mats = mats
         self.tables = tables

@@ -22,15 +22,15 @@ from gpumcrpt.physics.relaxation_tables import RelaxationTables
 
 
 @dataclass
-class EMCondensedStats:
+class CondensedHistoryMultiParticleStats:
     escaped_photon_energy_MeV: float
     annihilations: int
     brems_photons: int
     delta_electrons: int
 
 
-class TritonEMCondensedTransportEngine:
-    """Milestone 3 backend: photons + condensed electrons/positrons.
+class TritonPhotonEMCondensedHistoryEngine:
+    """Photon-EM-CondensedHistoryMultiParticle transport engine (Milestone 3).
 
     Scope (MVP):
     - Photons: Milestone-2 Woodcock flight + classify + Compton/Rayleigh/PE.
@@ -57,7 +57,7 @@ class TritonEMCondensedTransportEngine:
         device: str = "cuda",
     ) -> None:
         if device != "cuda" or not torch.cuda.is_available():
-            raise RuntimeError("TritonEMCondensedTransportEngine requires CUDA")
+            raise RuntimeError("TritonPhotonEMCondensedHistoryEngine requires CUDA")
 
         self.mats = mats
         self.tables = tables
@@ -65,7 +65,7 @@ class TritonEMCondensedTransportEngine:
         self.voxel_size_cm = voxel_size_cm
         self.device = device
 
-        self._last_stats = EMCondensedStats(
+        self._last_stats = CondensedHistoryMultiParticleStats(
             escaped_photon_energy_MeV=0.0,
             annihilations=0,
             brems_photons=0,
@@ -103,7 +103,7 @@ class TritonEMCondensedTransportEngine:
                 self._relax_tables = RelaxationTables.dummy(self.device, M=M, S=S)
 
     @property
-    def last_stats(self) -> EMCondensedStats:
+    def last_stats(self) -> CondensedHistoryMultiParticleStats:
         return self._last_stats
 
     @torch.no_grad()
@@ -166,7 +166,7 @@ class TritonEMCondensedTransportEngine:
         brems_photons += n_b2
         delta_electrons += n_d2
 
-        self._last_stats = EMCondensedStats(
+        self._last_stats = CondensedHistoryMultiParticleStats(
             escaped_photon_energy_MeV=float(escaped),
             annihilations=int(annihilations),
             brems_photons=int(brems_photons),

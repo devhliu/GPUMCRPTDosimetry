@@ -76,9 +76,16 @@ def compute_ebin_log_uniform(E: torch.Tensor, *, common_log_E_min: float, common
     return out
 
 
-class Phase10WiringMixin:
+class PhotonEMBankSoAVacancyRelaxationMixin:
     """
-    Mixin-style: include these methods in your TritonEngine class.
+    Mixin-style: include these methods in your TritonEngine class (Phase 10).
+
+    Photon-EM-BankSoAVacancyRelaxation architecture with:
+      - SoA particle banks (x,y,z,dx,dy,dz,E,w,ebin,rng,status)
+      - Vacancy bank (x,y,z,atom_Z,shell_idx,w,rng,status)
+      - Atomic appends to bank tails
+      - Vacancy relaxation cascade (X-rays, Auger electrons)
+      - Philox 4x32 counter-based RNG
 
     Requires you define/own:
       self.photons, self.electrons, self.vacancies

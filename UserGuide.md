@@ -17,10 +17,10 @@ This guide provides comprehensive instructions for using the GPUMCRPTDosimetry p
 
 ### Prerequisites
 
-- NVIDIA GPU with CUDA support (recommended) or CPU-only mode
+- NVIDIA GPU with CUDA Compute Capability 7.0+ (RTX series recommended) or CPU-only mode
 - Python 3.10 or later
 - PyTorch 2.2 or later
-- Triton 2.1 or later
+- **Triton 3.5.1** (exact version required for GPU kernel compatibility)
 
 ### Installation Steps
 
@@ -29,18 +29,15 @@ This guide provides comprehensive instructions for using the GPUMCRPTDosimetry p
 git clone <repository-url>
 cd GPUMCRPTDosimetry
 
-# Install core dependencies
+# Install core dependencies with correct versions
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install triton
+pip install triton==3.5.1  # CRITICAL: Exact version
 
 # Install package dependencies
 pip install nibabel numpy h5py pyyaml
 
-# Install the package in development mode
-pip install -e .
-
-# Optional: Install development dependencies
-pip install pytest
+# For development with testing
+pip install -e ".[dev]"
 ```
 
 ### Verification
@@ -48,8 +45,151 @@ pip install pytest
 Test the installation:
 
 ```python
-import gpumcrpt
-print(f"GPUMCRPTDosimetry version: {gpumcrpt.__version__}")
+import torch
+import triton
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"Triton version: {triton.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+
+# For GPU mode
+if torch.cuda.is_available():
+    print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA Compute Capability: {torch.cuda.get_device_capability(0)}")
+```
+
+### Running Tests
+
+After installation, verify everything works:
+
+```bash
+# Set Python path for imports
+export PYTHONPATH=$PWD/src:$PYTHONPATH
+
+# Run all tests
+pytest tests/ -v
+
+# Run specific test suite
+pytest tests/test_physics_validation.py -v     # Physics correctness
+pytest tests/test_integration.py -v            # Integration & workflow
+pytest tests/test_gpu_performance.py -v        # GPU performance (requires CUDA)
+```
+
+## Testing and Validation
+
+### Test Suite Overview
+
+The package includes comprehensive tests covering physics, GPU performance, and integration:
+
+#### Physics Validation Tests
+
+Tests core physics implementations and correctness:
+
+```bash
+pytest tests/test_physics_validation.py -v
+```
+
+Covers:
+- **Discrete emission parsing**: ICRP-107 JSON data reading
+- **Beta spectrum sampling**: Continuous spectrum sampling accuracy
+- **Dose conversion**: Energy deposition to absorbed dose (Gy)
+- **Material composition**: HU-to-material mapping validity
+- **RNG determinism**: Reproducibility with fixed seeds
+- **Energy conservation**: Total energy accounting across decay modes
+
+#### Integration Tests
+
+Validates complete workflows and physics consistency:
+
+```bash
+pytest tests/test_integration.py -v
+```
+
+Covers:
+- **Activity-to-primaries**: Radioactive decay particle generation
+- **Energy conservation**: Across all transport stages
+- **Weighted sampling**: Voxel probability distributions
+- **Compton kinematics**: Photon scattering physics
+- **Stopping power**: Charged particle energy loss
+- **Material handling**: Density and composition validity
+- **Numerical stability**: Edge cases and extreme values
+
+#### GPU Performance Tests
+
+Validates GPU kernel performance and numerical stability:
+
+```bash
+pytest tests/test_gpu_performance.py -v -s  # -s for live output
+```
+
+Covers (requires CUDA):
+- **Triton 3.5.1 API**: Version compatibility and decorators
+- **Memory efficiency**: Coalesced access patterns
+- **Kernel performance**: Launch overhead and bandwidth utilization
+- **Numerical stability**: Large accumulations and small-number division
+- **Boundary conditions**: Voxel containment checking
+
+### Running Test Subsets
+
+```bash
+# Physics tests only
+pytest tests/test_physics_validation.py::TestDiscreteEmissionParsing -v
+
+# GPU tests only (requires CUDA)
+pytest tests/test_gpu_performance.py -v
+
+# With coverage report
+pytest --cov=src/gpumcrpt tests/
+```
+
+### Test Troubleshooting
+
+**Missing test dependencies?**
+```bash
+pip install pytest pytest-cov
+```
+
+**CUDA tests skip?**
+GPU tests automatically skip if CUDA is unavailable. To force run:
+```bash
+pytest tests/test_gpu_performance.py -v --tb=short
+```
+
+**Performance test timeout?**
+Adjust PyTest timeout for large simulations:
+```bash
+pytest tests/test_integration.py --timeout=600 -v
+```
+
+### Validation Checklist
+
+Before running clinical simulations:
+
+- [ ] All tests pass: `pytest tests/ -v`
+- [ ] Triton version correct: `python -c "import triton; print(triton.__version__)"`
+- [ ] CUDA available: `python -c "import torch; print(torch.cuda.is_available())"`
+- [ ] Physics tables exist: Check `physics_tables.h5` or generate via `scripts/build_toy_physics_h5.py`
+- [ ] Radionuclide data available: Check `src/gpumcrpt/decaydb/icrp107_database/`
+- [ ] Example config loads: `yaml.load("configs/example_simulation.yaml")`
+
+### Custom Physics Validation
+
+To validate against known results:
+
+```python
+from gpumcrpt.pipeline import run_dosimetry
+import numpy as np
+
+# Run small test case
+result = run_dosimetry(...)
+
+# Compare to reference (if available)
+reference = np.load("reference_dose.npy")
+difference = np.abs(result - reference) / (np.abs(reference) + 1e-6)
+
+# Statistical uncertainty should explain differences
+print(f"Mean relative difference: {difference.mean():.4f}")
+print(f"Max relative difference: {difference.max():.4f}")
 ```
 
 ## Basic Usage
@@ -325,10 +465,10 @@ python scripts/build_toy_physics_h5.py --out custom_physics.h5
 Access low-level transport engines:
 
 ```python
-from gpumcrpt.transport.engine_gpu_triton_em_condensed import TritonEMCondensedTransportEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
 
 # Custom transport configuration
-transport_engine = TritonEMCondensedTransportEngine(
+transport_engine = TritonPhotonEMCondensedHistoryEngine(
     mats=materials_volume,
     tables=physics_tables,
     sim_config=custom_config,

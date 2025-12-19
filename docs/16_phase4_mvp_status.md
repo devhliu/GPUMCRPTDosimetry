@@ -2,7 +2,7 @@
 
 This commit introduces the **skeleton** of the Triton GPU transport engine:
 - Triton kernel: `photon_woodcock_flight_kernel` (MVP, placeholder energy binning)
-- Orchestrator: `TritonTransportEngine`
+- Orchestrator: `LocalDepositOnlyTransportEngine`
 
 ## What works now
 - GPU-side photon propagation with Woodcock majorant sampling

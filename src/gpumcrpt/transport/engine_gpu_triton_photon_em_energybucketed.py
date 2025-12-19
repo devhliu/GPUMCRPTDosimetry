@@ -61,8 +61,9 @@ def _precompute_ebin(E: torch.Tensor, e_edges: torch.Tensor) -> torch.Tensor:
     return (torch.bucketize(E, e_edges) - 1).clamp_(0, e_edges.numel() - 2).to(torch.int32)
 
 
-class TritonBucketedGraphEngineSeparated:
+class TritonPhotonEMEnergyBucketedGraphsEngine:
     """
+    Photon-EM-EnergyBucketedPersistentGraphs transport engine (Phase 7).
     Adds per-bucket record buffers so charged steps can be CUDA-graphed even in sorted_voxel mode.
     """
 
