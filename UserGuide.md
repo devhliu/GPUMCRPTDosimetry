@@ -242,7 +242,7 @@ run_dosimetry(
 ### Activity Data Requirements
 
 - **Format**: NIfTI (.nii or .nii.gz)
-- **Units**: Becquerels per second per voxel (Bq/s/voxel)
+- **Units**: Becquerels-second per voxel (Bq*s/voxel, Time-Integrated Activity)
 - **Spatial registration**: Must align with CT data
 - **Resolution**: Should match CT or be resampled
 

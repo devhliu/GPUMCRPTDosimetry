@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from gpumcrpt.io.nifti import save_nifti_like
+import nibabel as nib
 from gpumcrpt.materials.phantoms import make_nema_iec_body_phantom
 
 
@@ -41,10 +41,10 @@ def main() -> None:
     act_path = os.path.join(args.out_dir, "nema_activity_bqs.nii.gz")
     lbl_path = os.path.join(args.out_dir, "nema_sphere_label.nii.gz")
 
-    save_nifti_like(phantom.ct_hu, phantom.ct_hu.data, ct_path)
-    save_nifti_like(phantom.activity_bqs, phantom.activity_bqs.data, act_path)
+    nib.save(phantom.ct_hu, ct_path)
+    nib.save(phantom.activity_bqs, act_path)
     if phantom.sphere_label is not None:
-        save_nifti_like(phantom.sphere_label, phantom.sphere_label.data, lbl_path)
+        nib.save(phantom.sphere_label, lbl_path)
 
     print("Wrote:")
     print(f"  {ct_path}")

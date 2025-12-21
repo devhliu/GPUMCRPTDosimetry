@@ -18,7 +18,7 @@ from gpumcrpt.transport.triton.photoelectric_with_vacancy import photon_photoele
 from gpumcrpt.transport.triton.positron import positron_annihilation_at_rest_kernel
 from gpumcrpt.transport.triton.positron_step import positron_condensed_step_kernel
 from gpumcrpt.transport.triton.rayleigh import photon_rayleigh_kernel
-from gpumcrpt.physics.relaxation_tables import RelaxationTables
+from gpumcrpt.physics_tables.relaxation_tables import RelaxationTables
 
 
 @dataclass

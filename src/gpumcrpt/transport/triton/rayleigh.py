@@ -55,7 +55,7 @@ def photon_rayleigh_kernel(
         mu = tl.maximum(-1.0, tl.minimum(mu, 1.0))
 
     cos_t = mu
-    phi = 2.0 * tl.pi * u2
+    phi = 2.0 * 3.141592653589793 * u2
     nuz, nuy, nux = _rotate_dir_kernel(uz, uy, ux, cos_t, phi)
 
     tl.store(out_pos_ptr + offs * 3 + 0, z, mask=True)

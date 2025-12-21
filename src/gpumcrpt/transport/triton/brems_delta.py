@@ -44,7 +44,7 @@ def electron_brems_emit_kernel(
     u_mu, rng = rand_uniform_u01(rng)
     u_phi, rng = rand_uniform_u01(rng)
     mu = 2.0 * u_mu - 1.0
-    phi = u_phi * 2.0 * tl.pi
+    phi = u_phi * 2.0 * 3.141592653589793
     sin_theta = tl.sqrt(tl.maximum(0.0, 1.0 - mu * mu))
     uz = mu
     uy = sin_theta * tl.sin(phi)

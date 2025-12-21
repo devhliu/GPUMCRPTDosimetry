@@ -16,7 +16,7 @@ class ParticleQueues:
 
 
 def sample_weighted_decays_and_primaries(
-    activity_bqs: torch.Tensor,  # [Z,Y,X] Bq/s per voxel
+    activity_bqs: torch.Tensor,  # [Z,Y,X] Bq*s per voxel
     voxel_size_cm: Tuple[float, float, float],
     affine,
     nuclide: ICRP107Nuclide,
@@ -40,7 +40,7 @@ def sample_weighted_decays_and_primaries(
       with weights scaled by total yield. This is faster but approximate.
 
     Notes
-    - activity_bqs is treated as Bq/s per voxel.
+    - activity_bqs is treated as Bq*s per voxel (Time-Integrated Activity).
     - Returned particle weights are scaled so tallies are proportional to activity.
     - Positions are in cm with ordering (z, y, x). Directions use the same ordering.
     """

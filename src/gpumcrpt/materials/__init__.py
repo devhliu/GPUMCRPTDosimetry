@@ -7,7 +7,7 @@ from .hu_materials import (
 	compute_material_effective_atom_Z,
 )
 
-from .phantoms import (
+from ..phantoms.phantoms import (
 	NemaIecBodyPhantomVolumes,
 	PhantomVolumes,
 	make_nema_iec_body_phantom,

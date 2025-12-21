@@ -1,8 +1,8 @@
 # Simple Materials Table for Testing
 # Minimal materials table for quick testing and validation
 
-name: "simple_test"
-description: "Simple materials table for testing and validation"
+name: "simple_5_compartments"
+description: "Simple materials table with 5 compartments for testing and validation"
 source: "Test/Validation"
 is_default: false
 

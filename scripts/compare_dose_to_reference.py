@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gpumcrpt.io.nifti import load_nifti
+import nibabel as nib
 
 
 @dataclass
@@ -27,17 +27,17 @@ def compare_dose(
     mask_path: str | None,
     eps: float,
 ) -> CompareResult:
-    dose_img = load_nifti(dose_path)
-    ref_img = load_nifti(reference_path)
+    dose_img = nib.load(dose_path)
+    ref_img = nib.load(reference_path)
 
-    dose = np.asarray(dose_img.data, dtype=np.float64)
-    ref = np.asarray(ref_img.data, dtype=np.float64)
+    dose = np.asarray(dose_img.get_fdata(dtype=np.float32), dtype=np.float64)
+    ref = np.asarray(ref_img.get_fdata(dtype=np.float32), dtype=np.float64)
     if dose.shape != ref.shape:
         raise ValueError(f"Shape mismatch: dose={dose.shape} ref={ref.shape}")
 
     if mask_path is not None:
-        mask_img = load_nifti(mask_path)
-        mask = np.asarray(mask_img.data) > 0
+        mask_img = nib.load(mask_path)
+        mask = np.asarray(mask_img.get_fdata(dtype=np.float32)) > 0
         if mask.shape != dose.shape:
             raise ValueError(f"Mask shape mismatch: mask={mask.shape} dose={dose.shape}")
     else:

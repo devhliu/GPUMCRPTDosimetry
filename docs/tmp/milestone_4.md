@@ -54,7 +54,7 @@ Validation phantoms
 
 NIfTI conventions (expected)
 - CT: HU values (float32) in the CT volume.
-- Activity: "Bq/s per voxel" (float32). The pipeline samples histories proportional to this voxel value.
+- Activity: "Bq*s per voxel" (Time-Integrated Activity, float32). The pipeline samples histories proportional to this voxel value.
 Notes
 - This milestone is primarily about data/modeling and I/O/validation glue. It should not regress performance-critical kernels.
 

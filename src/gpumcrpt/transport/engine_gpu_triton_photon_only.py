@@ -194,7 +194,7 @@ class PhotonOnlyTransportEngine:
                 self.tables.ref_density_g_cm3,
                 Z=Z, Y=Y, X=X,
                 M=M, ECOUNT=ECOUNT,
-                BLOCK=256,
+                N=N,  # Add missing N parameter
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
 

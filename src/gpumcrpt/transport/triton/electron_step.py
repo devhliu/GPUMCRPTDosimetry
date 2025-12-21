@@ -65,7 +65,7 @@ def sample_multiple_scattering_angle(u1: tl.float32, u2: tl.float32, step_length
     cos_theta = 1.0 - 0.5 * theta * theta
     
     # Sample azimuthal angle uniformly
-    phi = 2.0 * tl.pi * u2
+    phi = 2.0 * 3.141592653589793 * u2
     
     return cos_theta, phi
 

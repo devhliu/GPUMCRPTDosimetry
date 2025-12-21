@@ -55,7 +55,7 @@ def atomic_relaxation_kernel(
     u2, rng = rand_uniform_u01(rng)
     cost = 2.0 * u1 - 1.0
     sint = tl.sqrt(tl.maximum(0.0, 1.0 - cost * cost))
-    phi = 2.0 * tl.pi * u2
+    phi = 2.0 * 3.141592653589793 * u2
     ux = sint * tl.cos(phi)
     uy = sint * tl.sin(phi)
     uz = cost

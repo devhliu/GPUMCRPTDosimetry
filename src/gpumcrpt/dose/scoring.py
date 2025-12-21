@@ -29,7 +29,7 @@ def edep_to_dose_and_uncertainty(
 
     # Convert to dose
     mass_kg = (rho.to(edep_mean_MeV.dtype) * float(voxel_volume_cm3)) / 1000.0
-    mass_kg = torch.clamp(mass_kg, min=1e-12)
+    mass_kg = torch.clamp(mass_kg, min=5e-5)
 
     dose_Gy = (edep_mean_MeV * _MEV_TO_J) / mass_kg
 

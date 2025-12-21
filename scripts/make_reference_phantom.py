@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from gpumcrpt.io.nifti import save_nifti_like
+import nibabel as nib
 from gpumcrpt.materials.phantoms import make_water_slab_with_bone_cylinder
 
 
@@ -32,8 +32,8 @@ def main() -> None:
     ct_path = os.path.join(args.out_dir, "phantom_ct_hu.nii.gz")
     act_path = os.path.join(args.out_dir, "phantom_activity_bqs.nii.gz")
 
-    save_nifti_like(phantom.ct_hu, phantom.ct_hu.data, ct_path)
-    save_nifti_like(phantom.activity_bqs, phantom.activity_bqs.data, act_path)
+    nib.save(phantom.ct_hu, ct_path)
+    nib.save(phantom.activity_bqs, act_path)
 
     print("Wrote:")
     print(f"  {ct_path}")

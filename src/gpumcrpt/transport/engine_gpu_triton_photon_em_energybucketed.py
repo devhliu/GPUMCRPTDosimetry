@@ -22,7 +22,7 @@ import torch
 import triton
 
 from gpumcrpt.materials.hu_materials import MaterialsVolume
-from gpumcrpt.physics.tables import PhysicsTables
+from gpumcrpt.physics_tables.tables import PhysicsTables
 
 from gpumcrpt.transport.triton.photon_flight import photon_woodcock_flight_kernel
 from gpumcrpt.transport.triton.photon_interactions import photon_classify_kernel

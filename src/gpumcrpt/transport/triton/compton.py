@@ -89,7 +89,7 @@ def photon_compton_kernel(
 
     # sample azimuth
     u2, rng = rand_uniform_u01(rng)
-    phi = 2.0 * tl.pi * u2
+    phi = 2.0 * 3.141592653589793 * u2
 
     # scattered photon direction
     nuz, nuy, nux = _rotate_dir_kernel(uz, uy, ux, cos_t, phi)

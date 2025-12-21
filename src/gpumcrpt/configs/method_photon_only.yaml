@@ -1,0 +1,48 @@
+# Photon Only Method Configuration
+# This method considers only photon contributions for dosimetry
+
+device: cuda
+seed: 12347
+
+io:
+  resample_ct_to_activity: false
+  output_uncertainty: relative
+
+cutoffs:
+  photon_keV: 3.0
+  electron_keV: 20.0
+
+materials:
+  # Multi-tissue model for patient anatomy
+  hu_to_density:
+    - [-1000, 0.0012]   # Air
+    - [-900, 0.26]      # Lung tissue
+    - [-100, 0.95]      # Fat
+    - [0, 1.00]         # Soft Tissue
+    - [40, 1.06]        # Muscle
+    - [500, 1.16]       # Trabecular bone
+    - [1200, 1.85]      # Cortical bone
+  hu_to_class:
+    - [-1000, -850, 0]   # air
+    - [-950, -850, 1]    # lung
+    - [-100, -50, 2]     # fat
+    - [0, 50, 3]         # soft_tissue
+    - [40, 100, 4]       # muscle
+    - [300, 800, 5]      # trabecular bone
+    - [800, 2000, 6]     # cortical bone
+
+physics_tables:
+  h5_path: examples/common/physics_tables/photon_only_physics.h5
+
+decaydb:
+  type: icrp107_json
+  path: src/gpumcrpt/decaydb/icrp107_database/icrp107
+
+monte_carlo:
+  n_histories: 100000000
+  n_batches: 25
+  max_wavefront_iters: 10000
+
+  triton:
+    engine: mvp
+    method: photon_only
