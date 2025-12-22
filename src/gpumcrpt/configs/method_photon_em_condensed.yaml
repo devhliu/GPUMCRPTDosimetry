@@ -13,6 +13,7 @@ cutoffs:
   electron_keV: 20.0
 
 materials:
+  name: "default_materials" # Name of the material library
   # Multi-tissue model for patient anatomy
   hu_to_density:
     - [-1000, 0.0012]   # Air
@@ -32,7 +33,7 @@ materials:
     - [800, 2000, 6]     # cortical bone
 
 physics_tables:
-  h5_path: examples/common/physics_tables/photon_em_condensed_physics.h5
+  directory: "src/gpumcrpt/physics_tables/precomputed_tables"
 
 decaydb:
   type: icrp107_json
@@ -44,5 +45,5 @@ monte_carlo:
   max_wavefront_iters: 10000
 
   triton:
-    engine: mvp
-    method: photon_em_condensed
+    engine: photon_em_condensedhistory
+    method: photon_em_condensedhistory

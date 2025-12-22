@@ -63,7 +63,21 @@ def run_dosimetry(
         device=device,
     )
 
-    tables = load_physics_tables_h5(sim_config["physics_tables"]["h5_path"], device=device)
+    # Determine physics table path dynamically
+    physics_tables_cfg = sim_config["physics_tables"]
+    material_library_name = sim_config["materials"].get("name", "default_materials")
+    physics_mode = sim_config["monte_carlo"]["triton"]["engine"]
+    
+    h5_filename = f"{material_library_name}-{physics_mode}.h5"
+    h5_path = Path(physics_tables_cfg.get("directory", "src/gpumcrpt/physics_tables/precomputed_tables")) / h5_filename
+    
+    if not h5_path.exists():
+        raise FileNotFoundError(
+            f"Physics table not found at {h5_path}. "
+            f"Please generate it first using the 'scripts/generate_physics_tables.py' script."
+        )
+        
+    tables = load_physics_tables_h5(h5_path, device=device)
 
     # Decay DB (ICRP107 JSON)
     db = sim_config["decaydb"]

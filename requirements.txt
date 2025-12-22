@@ -5,3 +5,4 @@ triton==3.5.1
 h5py>=3.10
 pyyaml>=6.0
 pytest>=8.0
+nist-calculators
