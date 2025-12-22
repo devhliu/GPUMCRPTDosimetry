@@ -3,8 +3,8 @@ from __future__ import annotations
 import triton
 import triton.language as tl
 
-from .samplers import sample_inv_cdf_1d
-from .rng import rand_uniform_u01
+from gpumcrpt.transport.triton.samplers import sample_inv_cdf_1d
+from gpumcrpt.transport.triton.rng import rand_uniform_u01
 
 
 @triton.jit

@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 
-from .hu_materials import MaterialsLibrary, build_materials_library_from_config
+from gpumcrpt.materials.hu_materials import MaterialsLibrary, build_materials_library_from_config
 
 
 @dataclass

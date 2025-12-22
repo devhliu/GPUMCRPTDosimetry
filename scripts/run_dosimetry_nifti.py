@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from gpumcrpt.pipeline import run_dosimetry
+from gpumcrpt.python_api.pipeline import run_dosimetry
 
 
 def main() -> None:

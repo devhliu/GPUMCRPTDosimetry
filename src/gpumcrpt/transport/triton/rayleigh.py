@@ -3,8 +3,8 @@ from __future__ import annotations
 import triton
 import triton.language as tl
 
-from .rng import rand_uniform_u01
-from .compton import _rotate_dir_kernel
+from gpumcrpt.transport.triton.rng import rand_uniform_u01
+from gpumcrpt.transport.triton.compton import _rotate_dir_kernel
 
 
 @triton.jit

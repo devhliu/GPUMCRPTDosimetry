@@ -4,7 +4,7 @@ import argparse
 import os
 
 import nibabel as nib
-from gpumcrpt.materials.phantoms import make_water_slab_with_bone_cylinder
+from gpumcrpt.phantoms.phantoms import make_water_slab_with_bone_cylinder
 
 
 def main() -> None:

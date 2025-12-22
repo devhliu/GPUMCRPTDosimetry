@@ -1,1 +1,1 @@
-from .utility import get_icrp107_spectrum
+from gpumcrpt.decaydb.icrp107_database.utility import get_icrp107_spectrum

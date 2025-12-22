@@ -3,7 +3,7 @@ from __future__ import annotations
 import triton
 import triton.language as tl
 
-from .rng import rand_uniform_u01
+from gpumcrpt.transport.triton.rng import rand_uniform_u01
 
 
 @triton.jit

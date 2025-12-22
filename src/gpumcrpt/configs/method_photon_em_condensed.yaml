@@ -39,6 +39,9 @@ decaydb:
   type: icrp107_json
   path: src/gpumcrpt/decaydb/icrp107_database/icrp107
 
+nuclide:
+  name: "Lu-177"
+
 monte_carlo:
   n_histories: 100000000
   n_batches: 20

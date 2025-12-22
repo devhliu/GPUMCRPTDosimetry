@@ -130,6 +130,12 @@ def load_physics_tables_h5(path: str, device: str = "cuda") -> PhysicsTables:
         else:
             compton_convention = "cos_theta"
 
+        if "/samplers/electron/brems/inv_cdf_Efrac" in f:
+            brem_inv = np.asarray(f["/samplers/electron/brems/inv_cdf_Efrac"], dtype=np.float32)
+
+        if "/samplers/electron/delta/inv_cdf_Efrac" in f:
+            delta_inv = np.asarray(f["/samplers/electron/delta/inv_cdf_Efrac"], dtype=np.float32)
+
     def _to_torch(x, dev):
         if x is None:
             return None

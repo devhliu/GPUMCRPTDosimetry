@@ -9,13 +9,13 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .hu_materials import (
+from gpumcrpt.materials.hu_materials import (
     MaterialsLibrary, 
     MaterialsVolume, 
     build_materials_from_hu,
     build_materials_library_from_config
 )
-from .materials_registry import MaterialsRegistry, get_default_registry
+from gpumcrpt.materials.materials_registry import MaterialsRegistry, get_default_registry
 
 
 class MaterialsManager:

@@ -15,10 +15,10 @@ import torch
 import triton
 from typing import Dict, Any, Optional
 
-from .triton.optimization import GPUConfigOptimizer, create_soa_layout, optimize_memory_access_pattern
-from .triton.performance import PerformanceMonitor, time_kernel_execution
-from ..kernels.triton.rng_bridge import upgrade_rng_i32_to_philox_soa, is_philox_soa
-from .triton.photon_flight_optimized import launch_optimized_photon_flight
+from gpumcrpt.transport.triton.optimization import GPUConfigOptimizer, create_soa_layout, optimize_memory_access_pattern
+from gpumcrpt.transport.triton.performance import PerformanceMonitor, time_kernel_execution
+from gpumcrpt.kernels.triton.rng_bridge import upgrade_rng_i32_to_philox_soa, is_philox_soa
+from gpumcrpt.transport.triton.photon_flight_optimized import launch_optimized_photon_flight
 
 
 class OptimizedGPUEngine:

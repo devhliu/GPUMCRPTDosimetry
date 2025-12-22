@@ -1,4 +1,4 @@
-from .hu_materials import (
+from gpumcrpt.materials.hu_materials import (
 	MaterialsLibrary,
 	MaterialsVolume,
 	build_default_materials_library,
@@ -7,7 +7,7 @@ from .hu_materials import (
 	compute_material_effective_atom_Z,
 )
 
-from ..phantoms.phantoms import (
+from gpumcrpt.phantoms.phantoms import (
 	NemaIecBodyPhantomVolumes,
 	PhantomVolumes,
 	make_nema_iec_body_phantom,

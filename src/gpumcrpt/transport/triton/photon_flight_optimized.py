@@ -7,8 +7,8 @@ from __future__ import annotations
 import triton
 import triton.language as tl
 
-from .rng import rand_uniform_u01_philox, philox_advance_counter
-from .optimization import get_optimal_kernel_config
+from gpumcrpt.transport.triton.rng import rand_uniform_u01_philox, philox_advance_counter
+from gpumcrpt.transport.triton.optimization import get_optimal_kernel_config
 
 
 @triton.jit

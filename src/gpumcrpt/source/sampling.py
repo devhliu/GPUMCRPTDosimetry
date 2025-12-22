@@ -5,7 +5,7 @@ from typing import Any, Dict, Tuple
 
 import torch
 
-from ..decaydb.icrp107_json import ICRP107Nuclide
+from gpumcrpt.decaydb.icrp107_json import ICRP107Nuclide
 
 
 @dataclass

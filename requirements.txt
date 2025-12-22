@@ -6,3 +6,7 @@ h5py>=3.10
 pyyaml>=6.0
 pytest>=8.0
 nist-calculators
+nistxcom
+xcom
+xcom-xray
+estar

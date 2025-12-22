@@ -1,1 +1,1 @@
-from .icrp107_json import ICRP107Nuclide, load_icrp107_json, find_icrp107_json, load_icrp107_nuclide
+from gpumcrpt.decaydb.icrp107_json import ICRP107Nuclide, load_icrp107_json, find_icrp107_json, load_icrp107_nuclide

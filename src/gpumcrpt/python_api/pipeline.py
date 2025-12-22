@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import nibabel as nib
@@ -8,16 +9,16 @@ import numpy as np
 import torch
 
 from nibabel.processing import resample_from_to
-from .materials.hu_materials import (
+from gpumcrpt.materials.hu_materials import (
     build_default_materials_library,
     build_materials_from_hu,
     build_materials_library_from_config,
 )
-from .physics.tables import load_physics_tables_h5
-from .decaydb import load_icrp107_nuclide
-from .source.sampling import sample_weighted_decays_and_primaries
-from .transport.engine import TransportEngine
-from .dose.scoring import edep_to_dose_and_uncertainty
+from gpumcrpt.physics_tables.tables import PhysicsTables, load_physics_tables_h5
+from gpumcrpt.decaydb import load_icrp107_nuclide
+from gpumcrpt.source.sampling import sample_weighted_decays_and_primaries
+from gpumcrpt.transport.engine import TransportEngine
+from gpumcrpt.dose.scoring import edep_to_dose_and_uncertainty
 
 
 @dataclass
@@ -63,21 +64,58 @@ def run_dosimetry(
         device=device,
     )
 
-    # Determine physics table path dynamically
-    physics_tables_cfg = sim_config["physics_tables"]
-    material_library_name = sim_config["materials"].get("name", "default_materials")
-    physics_mode = sim_config["monte_carlo"]["triton"]["engine"]
-    
-    h5_filename = f"{material_library_name}-{physics_mode}.h5"
-    h5_path = Path(physics_tables_cfg.get("directory", "src/gpumcrpt/physics_tables/precomputed_tables")) / h5_filename
-    
-    if not h5_path.exists():
-        raise FileNotFoundError(
-            f"Physics table not found at {h5_path}. "
-            f"Please generate it first using the 'scripts/generate_physics_tables.py' script."
+    def _engine_to_physics_mode(engine_name: str) -> str:
+        e = str(engine_name).lower()
+        if e in {"mvp", "localdepositonly", "local_deposit", "local-deposit"}:
+            return "local_deposit"
+        if e in {"photon_only", "photononly", "photon-only"}:
+            return "photon_only"
+        if e in {"em_condensed", "photon-em-condensedhistorymultiparticle", "photon_em_condensedhistory"}:
+            return "photon_em_condensedhistory"
+        return e
+
+    # Load physics tables (or create dummy tables for local_deposit engine)
+    triton_engine = sim_config.get("monte_carlo", {}).get("triton", {}).get("engine", "mvp")
+    physics_mode = _engine_to_physics_mode(triton_engine)
+
+    if physics_mode == "local_deposit":
+        # LocalDepositOnlyTransportEngine does not use physics tables.
+        # Provide a minimal placeholder to satisfy TransportEngine.
+        n_mat = len(mat_lib.material_names)
+        ref_rho = (
+            mat_lib.ref_density_g_cm3
+            if hasattr(mat_lib, "ref_density_g_cm3")
+            else mat_lib.density_g_cm3
+        ).to(device=device, dtype=torch.float32)
+        z = torch.zeros((n_mat, 1), device=device, dtype=torch.float32)
+        tables = PhysicsTables(
+            e_edges_MeV=torch.tensor([0.0, 1.0], device=device, dtype=torch.float32),
+            e_centers_MeV=torch.tensor([0.5], device=device, dtype=torch.float32),
+            material_names=list(mat_lib.material_names),
+            ref_density_g_cm3=ref_rho,
+            sigma_photo=z,
+            sigma_compton=z,
+            sigma_rayleigh=z,
+            sigma_pair=z,
+            sigma_total=z,
+            p_cum=z,
+            sigma_max=torch.zeros((1,), device=device, dtype=torch.float32),
+            S_restricted=z,
+            range_csda_cm=z,
         )
-        
-    tables = load_physics_tables_h5(h5_path, device=device)
+    else:
+        physics_tables_cfg = sim_config["physics_tables"]
+        material_library_name = sim_config.get("materials", {}).get("name", "default_materials")
+        h5_filename = f"{material_library_name}-{physics_mode}.h5"
+        h5_path = Path(physics_tables_cfg.get("directory", "src/gpumcrpt/physics_tables/precomputed_tables")) / h5_filename
+
+        if not h5_path.exists():
+            raise FileNotFoundError(
+                f"Physics table not found at {h5_path}. "
+                "Generate it first using scripts/generate_physics_tables.py."
+            )
+
+        tables = load_physics_tables_h5(str(h5_path), device=device)
 
     # Decay DB (ICRP107 JSON)
     db = sim_config["decaydb"]
@@ -128,4 +166,5 @@ def run_dosimetry(
     dose_img = nib.Nifti1Image(dose.detach().cpu().numpy(), affine=act_img.affine)
     unc_img = nib.Nifti1Image(unc.detach().cpu().numpy(), affine=act_img.affine)
     nib.save(dose_img, output_dose_path)
+    nib.save(unc_img, output_unc_path)
     nib.save(unc_img, output_unc_path)

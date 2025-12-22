@@ -4,12 +4,12 @@ from dataclasses import dataclass
 
 import torch
 
-from ..materials.hu_materials import MaterialsVolume
-from ..physics.tables import PhysicsTables
-from .cpu_oracle import CPUOracleConfig, run_cpu_oracle_transport
-from .engine_gpu_triton_localdepositonly import LocalDepositOnlyTransportEngine
-from .engine_gpu_triton_photon_only import PhotonOnlyTransportEngine
-from .engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
+from gpumcrpt.materials.hu_materials import MaterialsVolume
+from gpumcrpt.physics_tables.tables import PhysicsTables
+from gpumcrpt.transport.cpu_oracle import CPUOracleConfig, run_cpu_oracle_transport
+from gpumcrpt.transport.engine_gpu_triton_localdepositonly import LocalDepositOnlyTransportEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_only import PhotonOnlyTransportEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
 
 
 @dataclass
