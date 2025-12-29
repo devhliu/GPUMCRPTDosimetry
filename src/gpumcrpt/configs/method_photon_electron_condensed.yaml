@@ -1,8 +1,8 @@
-# Photon Only Method Configuration
-# This method considers only photon contributions for dosimetry
+# Photon+Electron Condensed Method Configuration
+# This method transports photons and uses condensed-history charged particle transport
 
 device: cuda
-seed: 12347
+seed: 12346
 
 io:
   resample_ct_to_activity: false
@@ -10,7 +10,7 @@ io:
 
 cutoffs:
   photon_keV: 30.0
-  electron_keV: 100.0
+  electron_keV: 50.0
 
 materials:
   name: "default_materials" # Name of the material library
@@ -48,5 +48,11 @@ monte_carlo:
   max_wavefront_iters: 100
 
   triton:
-    engine: photon_only
-    method: photon_only
+    engine: photon_electron_condensed
+    method: photon_electron_condensed
+
+electron_transport:
+  secondary_depth: 2
+  max_secondaries_per_primary: 10
+  max_secondaries_per_step: 5
+  f_range: 0.1

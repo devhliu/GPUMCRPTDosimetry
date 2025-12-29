@@ -137,10 +137,10 @@ def main() -> None:
 Examples:
 
   # Config-based mode (multi-method YAML):
-  python run_dosimetry.py --config config.yaml --method photon_em_condensed
+  python run_dosimetry.py --config config.yaml --method photon_electron_condensed
 
   # Config-based mode with custom output paths:
-  python run_dosimetry.py --config config.yaml --method photon_em_condensed \\
+  python run_dosimetry.py --config config.yaml --method photon_electron_condensed \\
       --out_dose /path/to/dose.nii.gz --out_unc /path/to/unc.nii.gz
 
   # Direct path mode (explicit paths):
@@ -160,7 +160,7 @@ Examples:
     )
     parser.add_argument(
         "--method",
-        choices=["local_deposit", "photon_em_condensed", "photon_em_energybucketed", "photon_only"],
+        choices=["local_deposit", "photon_electron_condensed", "photon_em_energybucketed", "photon_electron_local"],
         help="Method to use for dosimetry calculation (use with --config)",
     )
 

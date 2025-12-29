@@ -93,7 +93,7 @@ Where `θ` is the typical emission angle relative to photon direction
   - All photon energy deposited locally at interaction point
   - Secondary photoelectric electrons not tracked
   - Atomic relaxation (fluorescence/Auger) not simulated
-  - Consistent with photon_only mode
+  - Consistent with photon_electron_local mode
 - **Justification**: Photoelectric electrons have very short range (<1 mm for E < 1 MeV), making local deposition appropriate for dosimetry applications
 
 **Formulas:**
@@ -449,7 +449,7 @@ Where `ξ ∈ (0, 1]` is the uniform random number
 - Reasonable secondary particle budgets
 
 ### High Performance (Faster)
-- Photon-only mode (no charged particle tracking)
+- Photon-electron local mode (no charged particle tracking)
 - Larger step sizes
 - Minimal secondary particle tracking
 - Simplified physics models

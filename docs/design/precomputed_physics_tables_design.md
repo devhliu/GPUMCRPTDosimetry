@@ -19,8 +19,8 @@ This document presents a comprehensive design for improving the pre-computed phy
 
 ### Simulation Modes
 1. **local_deposit**: Simplified energy deposition
-2. **photon_only**: Photon transport only
-3. **photon_em_condensed**: Photon transport with condensed history electron transport
+2. **photon_electron_local**: Photon transport only
+3. **photon_electron_condensed**: Photon transport with condensed history electron transport
 
 ## Proposed Architecture
 
@@ -114,12 +114,12 @@ class BasePhysicsCalculator(ABC):
 - **Required Tables**: Photon attenuation coefficients, energy deposition kernels
 - **Optimization**: Coarse energy grid, minimal sampling tables
 
-#### 2. photon_only Mode
+#### 2. photon_electron_local Mode
 - **Purpose**: Photon transport studies
 - **Required Tables**: Complete photon interaction cross-sections, sampling tables
 - **Optimization**: Fine energy grid, comprehensive sampling
 
-#### 3. photon_em_condensed Mode
+#### 3. photon_electron_condensed Mode
 - **Purpose**: Full photon-electron transport
 - **Required Tables**: All photon and electron interactions, condensed history parameters
 - **Optimization**: Balanced accuracy and performance
@@ -255,8 +255,8 @@ src/gpumcrpt/
 │       └── performance_benchmark.py
 └── transport/                         # Updated transport engines
     ├── engine_gpu_triton_local_deposit.py
-    ├── engine_gpu_triton_photon_only.py
-    └── engine_gpu_triton_photon_em_condensed.py
+    ├── engine_gpu_triton_photon_electron_local.py
+    └── engine_gpu_triton_photon_electron_condensed.py
 
 data/
 ├── materials/                         # Material configuration files
@@ -265,8 +265,8 @@ data/
 │   └── custom_materials.yaml
 └── physics_tables/                    # Generated physics tables
     ├── local_deposit_physics.h5
-    ├── photon_only_physics.h5
-    └── photon_em_condensed_physics.h5
+    ├── photon_electron_local_physics.h5
+    └── photon_electron_condensed_physics.h5
 ```
 
 ## API Design

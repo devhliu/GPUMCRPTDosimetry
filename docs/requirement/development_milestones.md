@@ -13,11 +13,11 @@ The first milestone focused on creating a "Minimum Viable Product" (MVP) that co
     *   Addition of missing subpackages for materials, NIfTI I/O, and dose scoring.
     *   An end-to-end runnable script (`run_toy_mvp.py`) and an example configuration file.
 
-## Milestone 2: Photon-Only Transport
+## Milestone 2: Photon-Electron Local Transport
 
 This milestone replaced the MVP local-deposition engine with a real photon transport model.
 
-*   **Goal:** Implement a "photon-only" transport path with realistic physics.
+*   **Goal:** Implement a "photon-electron-local" transport path with realistic physics.
 *   **Key Features:**
     *   A new Triton backend for Woodcock "wavefront" photon transport.
     *   Interaction sampling for Compton scattering, Rayleigh scattering, and the photoelectric effect.
@@ -33,7 +33,7 @@ Milestone 3 extended the transport model to include charged particles.
 
 *   **Goal:** Implement condensed-history transport for electrons and positrons, including positron annihilation.
 *   **Key Features:**
-    *   A new "em_condensed" engine selectable via configuration.
+    *   A new "photon_electron_condensed" engine selectable via configuration.
     *   Condensed-history stepping for electrons and positrons, depositing energy continuously.
     *   Positron annihilation at rest, producing two 511 keV photons that are then transported.
     *   Bounded secondary particle generation (bremsstrahlung photons and delta electrons) to control the simulation complexity.

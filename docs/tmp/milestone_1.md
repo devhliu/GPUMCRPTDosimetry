@@ -23,4 +23,4 @@ Build toy physics tables: python scripts/build_toy_physics_h5.py --out toy_physi
 Run the MVP end-to-end: PYTHONPATH=src python scripts/run_toy_mvp.py --device cpu --tables toy_physics.h5 --histories 10000 --out toy_edep.pt
 Next development (Milestone 2 suggestion)
 
-Replace the MVP local-deposition engine with the first real wavefront step (even photon-only: flight + Compton/PE + energy bookkeeping gates). If you want, I can start by making a “photon-only transport” engine that still keeps the same TransportEngine interface.
+Replace the MVP local-deposition engine with the first real wavefront step (even photon-electron-local: flight + Compton/PE + energy bookkeeping gates). If you want, I can start by making a “photon-electron-local transport” engine that still keeps the same TransportEngine interface.

@@ -68,10 +68,10 @@ def run_dosimetry(
         e = str(engine_name).lower()
         if e in {"mvp", "localdepositonly", "local_deposit", "local-deposit"}:
             return "local_deposit"
-        if e in {"photon_only", "photononly", "photon-only"}:
-            return "photon_only"
-        if e in {"em_condensed", "photon-em-condensedhistorymultiparticle", "photon_em_condensedhistory"}:
-            return "photon_em_condensedhistory"
+        if e == "photon_electron_local":
+            return "photon_electron_local"
+        if e == "photon_electron_condensed":
+            return "photon_electron_condensed"
         if e in {"em_energybucketed", "photon-em-energybucketed", "photon_em_energybucketed", "energy_bucketed", "energybucketed"}:
             return "photon_em_energybucketed"
         return e

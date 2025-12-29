@@ -1,17 +1,17 @@
-Implemented Milestone 2’s first runnable “photon-only” transport path (Woodcock flight + interaction sampling + Compton/Rayleigh/PE handling) and wired it into the existing engine selector.
+Implemented Milestone 2’s first runnable “photon-electron-local” transport path (Woodcock flight + interaction sampling + Compton/Rayleigh/PE handling) and wired it into the existing engine selector.
 
 What Changed
 
-Added a new Triton backend that actually runs photon transport steps: engine_gpu_triton_photon_only.py
-Updated the transport selector to choose between Milestone 1 MVP and Milestone 2 photon-only via config: engine.py
+Added a new Triton backend that actually runs photon transport steps: engine_gpu_triton_photon_electron_local.py
+Updated the transport selector to choose between Milestone 1 MVP and Milestone 2 photon-electron-local via config: engine.py
 Added monte_carlo.triton.engine to the example config: example_simulation.yaml
-Added CUDA-skipped smoke tests (RNG consumption in classify + engine run sanity): test_milestone2_photon_only_smoke.py
-Added a toy runner for the photon-only engine: run_toy_photon_only.py
+Added CUDA-skipped smoke tests (RNG consumption in classify + engine run sanity): test_milestone2_photon_electron_local_smoke.py
+Added a toy runner for the photon-electron-local engine: run_toy_photon_electron_local.py
 How To Use
 
-Set monte_carlo.triton.engine: photon_only in your simulation YAML (see the example config above).
+Set monte_carlo.triton.engine: photon_electron_local in your simulation YAML (see the example config above).
 Or run the toy script with PYTHONPATH=src:
-cd MCGPURPTDosimetry/GPUMCRPTDosimetry && PYTHONPATH=src python scripts/run_toy_photon_only.py --tables toy_physics.h5
+cd MCGPURPTDosimetry/GPUMCRPTDosimetry && PYTHONPATH=src python scripts/run_toy_photon_electron_local.py --tables toy_physics.h5
 Notes / Current Limits
 
 If /samplers/photon/compton/inv_cdf is missing, the engine falls back to an isotropic 
@@ -274,6 +274,6 @@ Notes:
 
 ------------------------------------------------------------------------------
 
-Updated the Milestone-2 photon-only engine to always use an isotropic cosθ inverse-CDF table for Compton (ignores any H5-provided Compton table): engine_gpu_triton_photon_only.py
-Fixed a real import-time SyntaxError in the Triton Compton kernel call (must pass K as positional tl.constexpr, not K=...): engine_gpu_triton_photon_only.py
+Updated the Milestone-2 photon-electron-local engine to always use an isotropic cosθ inverse-CDF table for Compton (ignores any H5-provided Compton table): engine_gpu_triton_photon_electron_local.py
+Fixed a real import-time SyntaxError in the Triton Compton kernel call (must pass K as positional tl.constexpr, not K=...): engine_gpu_triton_photon_electron_local.py
 Re-ran pytest successfully (with PYTHONPATH=src): 2 passed, 7 skipped (skips are CUDA/Triton-gated tests)

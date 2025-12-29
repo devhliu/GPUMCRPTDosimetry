@@ -370,10 +370,10 @@ new_ctr1 = (ctr1 + carry).to(tl.uint32)
 **Current State:** Multiple engine implementations:
 - `engine_gpu_triton.py`
 - `engine_gpu_triton_photon_em_banksoa.py`
-- `engine_gpu_triton_photon_em_condensedhistory.py`
+- `engine_gpu_triton_photon_electron_condensed.py`
 - `engine_gpu_triton_photon_em_energybucketed.py`
 - `engine_gpu_triton_photon_em_lazycompaction.py`
-- `engine_gpu_triton_photon_only.py`
+- `engine_gpu_triton_photon_electron_local.py`
 - `engine_gpu_triton_relaxation_append.py`
 - `engine_gpu_triton_localdepositonly.py`
 

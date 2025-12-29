@@ -59,7 +59,7 @@ The implementation addresses four key double counting problems:
 **Design Specification**: Use production cut-offs to prevent tracking of low-energy secondaries that contribute negligibly to dose.
 
 **Implementation**:
-- File: [engine_gpu_triton_photon_em_condensedhistory.py](file:///mnt/d/WSL/workspace/devhliu/Dosimetry/MCGPURPTDosimetry/GPUMCRPTDosimetry/src/gpumcrpt/transport/engine_gpu_triton_photon_em_condensedhistory.py)
+- File: [engine_gpu_triton_photon_electron_condensed.py](file:///mnt/d/WSL/workspace/devhliu/Dosimetry/MCGPURPTDosimetry/GPUMCRPTDosimetry/src/gpumcrpt/transport/engine_gpu_triton_photon_electron_condensed.py)
 - Photon cut: `photon_cut_MeV` (default 3keV)
 - Electron cut: `e_cut_MeV` (default 20keV)
 - Below-cutoff particles deposit energy locally and are terminated
@@ -271,7 +271,7 @@ eligible = flag_mask & (counts < int(max_per_primary))
 | Problem | Solution | Implementation | Status |
 |---------|----------|----------------|--------|
 | Source Definition | Single emission loading | `icrp107_json.py` | ✓ Verified |
-| Production Cut-offs | Local deposit below cutoff | `engine_gpu_triton_photon_em_condensedhistory.py` | ✓ Verified |
+| Production Cut-offs | Local deposit below cutoff | `engine_gpu_triton_photon_electron_condensed.py` | ✓ Verified |
 | Kerma vs. Dose | Separate escaped energy tracking | `deposit.py` | ✓ Verified |
 | Relaxation Double Count | Mutually exclusive X-ray/Auger | `relaxation.py` | ✓ Verified |
 
@@ -960,4 +960,4 @@ The implementation uses modern GPU optimization techniques including autotuning,
 | Energy Deposition | `utils/deposit.py` |
 | Performance | `perf/monitor.py`, `perf/cuda_graphs.py`, `perf/optimization.py` |
 | Decay Database | `decaydb/icrp107_json.py` |
-| Transport Engine | `engine_gpu_triton_photon_em_condensedhistory.py` |
+| Transport Engine | `engine_gpu_triton_photon_electron_condensed.py` |

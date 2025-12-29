@@ -37,7 +37,7 @@ class CondensedHistoryMultiParticleStats:
     delta_electrons: int
 
 
-class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
+class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
     """Photon-EM-CondensedHistoryMultiParticle transport engine (Milestone 3).
 
     Modern implementation using high-performance unified kernels.
@@ -45,7 +45,7 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
     Scope (MVP):
     - Photons: Milestone-2 Woodcock flight + classify + Compton/PE.
       * Compton uses isotropic cos(theta) sampling (bring-up choice).
-      * Photoelectric deposits all photon energy locally (Option B - faster, consistent with photon_only mode).
+      * Photoelectric deposits all photon energy locally (Option B - faster, consistent with photon_electron_local mode).
     - Electrons: condensed-history steps using unified `charged_particle_step_kernel`.
       * Below-cutoff kinetic energy is deposited locally and particle terminated.
     - Positrons: condensed-history steps using unified `charged_particle_step_kernel` (particle_type=1).
@@ -250,6 +250,13 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
 
         for step_num in range(max_steps):
             step_start_time = time.time() if enable_timing else None
+
+            # Reset secondary output flags for this step
+            photon_alive.zero_()
+            secondary_alive.zero_()
+            if particle_type_val == 1:
+                ann_photon1_alive.zero_()
+                ann_photon2_alive.zero_()
             
             # cutoff deposit
             below = (E > 0) & (E < photon_cut_MeV) & (w > 0)
@@ -301,7 +308,7 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
                 real,
                 pos2, dir2, E2, w2, ebin2,
                 material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_pair,
+                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_rayleigh, self.tables.sigma_pair,
                 compton_inv_cdf, K,
                 seed,
                 # outputs:
@@ -589,29 +596,53 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
         for step in range(max_steps):
             step_start_time = time.time() if enable_timing else None
 
+            # Reset secondary output flags for this step
+            photon_alive.zero_()
+            secondary_alive.zero_()
+            if particle_type_val == 1:
+                ann_photon1_alive.zero_()
+                ann_photon2_alive.zero_()
+
             # Check cutoff
-            below_cut = (particle_E > 0) & (particle_E < e_cut) & (particle_weight > 0)
+            # Electrons below cutoff: deposit remaining kinetic energy and terminate.
+            # Positrons below cutoff: keep alive so the kernel can emit annihilation photons.
+            below_cut = (particle_E >= 0) & (particle_E < e_cut) & (particle_weight > 0) & (particle_alive > 0)
             if torch.any(below_cut):
-                # Deposit remaining energy locally
-                idx = torch.where(below_cut)[0]
-                self._deposit_local(
-                    pos=pos,
-                    E=torch.where(below_cut, particle_E, torch.zeros_like(particle_E)),
-                    w=particle_weight,
-                    edep_flat=edep_flat,
-                    Z=Z, Y=Y, X=X,
-                    voxel_size_cm=self.voxel_size_cm,
-                )
-                particle_E = torch.where(below_cut, torch.zeros_like(particle_E), particle_E)
-                particle_weight = torch.where(below_cut, torch.zeros_like(particle_weight), particle_weight)
-                particle_alive = torch.where(below_cut, 0, particle_alive)
+                if particle_type_val == 0:
+                    deposit_mask = below_cut
+                else:
+                    # For positrons, only deposit kinetic energy here; keep the particle alive for annihilation.
+                    deposit_mask = below_cut & (particle_E > 0)
+
+                if torch.any(deposit_mask):
+                    self._deposit_local(
+                        pos=pos,
+                        E=torch.where(deposit_mask, particle_E, torch.zeros_like(particle_E)),
+                        w=particle_weight,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
+
+                if particle_type_val == 0:
+                    particle_E = torch.where(below_cut, torch.zeros_like(particle_E), particle_E)
+                    particle_weight = torch.where(below_cut, torch.zeros_like(particle_weight), particle_weight)
+                    particle_alive = torch.where(below_cut, 0, particle_alive)
+                else:
+                    # Set kinetic energy to 0 so the kernel can annihilate-at-rest.
+                    particle_E = torch.where(below_cut, torch.zeros_like(particle_E), particle_E)
 
             # Count escaped energy
-            escaped_energy += torch.sum(particle_E[particle_E < 0]).item()
+            escaped_mask = particle_E < 0
+            if torch.any(escaped_mask):
+                escaped_energy += float(((-particle_E[escaped_mask]) * particle_weight[escaped_mask]).sum().item())
             particle_E = torch.maximum(particle_E, torch.tensor(0.0, device=particle_E.device))
 
             # Stop if no active particles
-            active_mask = particle_E > 0
+            if particle_type_val == 1:
+                active_mask = particle_alive > 0
+            else:
+                active_mask = particle_E > 0
             if not torch.any(active_mask):
                 break
 
@@ -656,6 +687,108 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
                 ELECTRON_REST_MASS_MEV=ELECTRON_REST_MASS_MEV, PI=PI,
             )
 
+
+            # Transport positron annihilation-at-rest photons (2 x 0.511 MeV) as photons.
+            if particle_type_val == 1 and secondary_depth > 0:
+                ann1_mask = ann_photon1_alive != 0
+                ann2_mask = ann_photon2_alive != 0
+
+                if torch.any(ann1_mask):
+                    idx1 = torch.where(ann1_mask)[0]
+                    self._annihilations_accum = getattr(self, "_annihilations_accum", 0) + int(idx1.numel())
+
+                    esc_ph = self._run_photons_inplace(
+                        pos=torch.stack([ann_photon1_pos_z[idx1], ann_photon1_pos_y[idx1], ann_photon1_pos_x[idx1]], dim=1),
+                        direction=torch.stack([ann_photon1_dir_z[idx1], ann_photon1_dir_y[idx1], ann_photon1_dir_x[idx1]], dim=1),
+                        E=torch.full((int(idx1.numel()),), ELECTRON_REST_MASS_MEV, device=self.device, dtype=torch.float32),
+                        w=particle_weight[idx1],
+                        edep=edep,
+                        secondary_depth=secondary_depth - 1,
+                        max_secondaries_per_primary=max_secondaries_per_primary,
+                        max_secondaries_per_step=max_secondaries_per_step,
+                    )
+                    escaped_energy += float(esc_ph)
+
+                if torch.any(ann2_mask):
+                    idx2 = torch.where(ann2_mask)[0]
+                    esc_ph = self._run_photons_inplace(
+                        pos=torch.stack([ann_photon2_pos_z[idx2], ann_photon2_pos_y[idx2], ann_photon2_pos_x[idx2]], dim=1),
+                        direction=torch.stack([ann_photon2_dir_z[idx2], ann_photon2_dir_y[idx2], ann_photon2_dir_x[idx2]], dim=1),
+                        E=torch.full((int(idx2.numel()),), ELECTRON_REST_MASS_MEV, device=self.device, dtype=torch.float32),
+                        w=particle_weight[idx2],
+                        edep=edep,
+                        secondary_depth=secondary_depth - 1,
+                        max_secondaries_per_primary=max_secondaries_per_primary,
+                        max_secondaries_per_step=max_secondaries_per_step,
+                    )
+                    escaped_energy += float(esc_ph)
+
+
+
+            # Transport charged-particle secondaries produced by the step kernel.
+            # Depth/budget control: when secondaries are disabled (or depth==0), deposit their energy locally
+            # so energy is conserved.
+            allow_sec = allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary)
+
+            # Brems photons
+            brem_mask = photon_alive != 0
+            if torch.any(brem_mask):
+                if allow_sec and secondary_depth > 0:
+                    idx_b = torch.where(brem_mask)[0]
+                    if int(idx_b.numel()) > max_secondaries_per_step:
+                        idx_b = idx_b[:max_secondaries_per_step]
+
+                    esc_ph = self._run_photons_inplace(
+                        pos=torch.stack([photon_pos_z[idx_b], photon_pos_y[idx_b], photon_pos_x[idx_b]], dim=1),
+                        direction=torch.stack([photon_dir_z[idx_b], photon_dir_y[idx_b], photon_dir_x[idx_b]], dim=1),
+                        E=photon_E[idx_b],
+                        w=particle_weight[idx_b],
+                        edep=edep,
+                        secondary_depth=0,
+                        max_secondaries_per_primary=max_secondaries_per_primary,
+                        max_secondaries_per_step=max_secondaries_per_step,
+                    )
+                    escaped_energy += float(esc_ph)
+                else:
+                    self._deposit_local(
+                        pos=torch.stack([photon_pos_z, photon_pos_y, photon_pos_x], dim=1),
+                        E=photon_E,
+                        w=particle_weight,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
+
+            # Delta electrons
+            delta_mask = secondary_alive != 0
+            if torch.any(delta_mask):
+                if allow_sec and secondary_depth > 0:
+                    idx_d = torch.where(delta_mask)[0]
+                    if int(idx_d.numel()) > max_secondaries_per_step:
+                        idx_d = idx_d[:max_secondaries_per_step]
+
+                    esc_e, nb_e, nd_e = self._run_electrons_inplace(
+                        pos=torch.stack([secondary_pos_z[idx_d], secondary_pos_y[idx_d], secondary_pos_x[idx_d]], dim=1),
+                        direction=torch.stack([secondary_dir_z[idx_d], secondary_dir_y[idx_d], secondary_dir_x[idx_d]], dim=1),
+                        E=secondary_E[idx_d],
+                        w=particle_weight[idx_d],
+                        edep=edep,
+                        secondary_depth=0,
+                        max_secondaries_per_primary=max_secondaries_per_primary,
+                        max_secondaries_per_step=max_secondaries_per_step,
+                    )
+                    escaped_energy += float(esc_e)
+                    n_brems += int(nb_e)
+                    n_delta += int(nd_e)
+                else:
+                    self._deposit_local(
+                        pos=torch.stack([secondary_pos_z, secondary_pos_y, secondary_pos_x], dim=1),
+                        E=secondary_E,
+                        w=particle_weight,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
             # Update particle state
             particle_E = new_particle_E
             particle_alive = new_particle_alive
@@ -704,6 +837,7 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
             return 0.0, 0, 0, 0
 
         # Use the electron method with particle_type=1 (positron)
+        self._annihilations_accum = 0
         # The unified kernel handles both electrons and positrons
         escaped_energy, n_brems, n_delta = self._run_electrons_inplace(
             pos=pos,
@@ -717,9 +851,7 @@ class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
             particle_type_val=1,  # Set particle_type to 1 for positrons
         )
 
-        # TODO: Add proper annihilation counting when positrons reach cutoff
-        # For now, return 0 annihilations as placeholder
-        annihilations = 0
+        annihilations = int(getattr(self, "_annihilations_accum", 0))
 
         return float(escaped_energy), annihilations, n_brems, n_delta
 

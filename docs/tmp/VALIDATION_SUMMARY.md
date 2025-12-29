@@ -184,7 +184,7 @@ Comprehensive review of the GPUMCRPTDosimetry codebase has been completed, cover
 - `/tests/test_physics_validation.py` - 16 physics tests
 - `/tests/test_gpu_performance.py` - 9 GPU/Triton tests  
 - `/tests/test_integration.py` - 13 workflow tests
-- `/tests/test_smoke_em_condensed.py` - Existing smoke test
+- `/tests/test_smoke_photon_electron_condensed.py` - Existing smoke test
 
 **Coverage**:
 - Physics correctness: ✅ Comprehensive

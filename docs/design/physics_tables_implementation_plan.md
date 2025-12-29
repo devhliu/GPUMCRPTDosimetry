@@ -342,7 +342,7 @@ from ...materials.enhanced_materials import EnhancedMaterialsLibrary
 @dataclass
 class TableGenerationConfig:
     """Configuration for table generation."""
-    method: str  # 'local_deposit', 'photon_only', 'photon_em_condensed'
+    method: str  # 'local_deposit', 'photon_electron_local', 'photon_electron_condensed'
     energy_range_MeV: Tuple[float, float] = (0.01, 20.0)
     num_energy_points: int = 200
     include_sampling_tables: bool = True
@@ -388,10 +388,10 @@ class PhysicsTableGenerator:
             # Physics tables based on method
             if self.config.method == 'local_deposit':
                 self._generate_local_deposit_tables(f)
-            elif self.config.method == 'photon_only':
-                self._generate_photon_only_tables(f)
-            elif self.config.method == 'photon_em_condensed':
-                self._generate_photon_em_condensed_tables(f)
+            elif self.config.method == 'photon_electron_local':
+                self._generate_photon_electron_local_tables(f)
+            elif self.config.method == 'photon_electron_condensed':
+                self._generate_photon_electron_condensed_tables(f)
             
             # Sampling tables if enabled
             if self.config.include_sampling_tables:
@@ -401,7 +401,7 @@ class PhysicsTableGenerator:
             if self.config.validation_enabled:
                 self._write_validation_info(f)
     
-    def _generate_photon_em_condensed_tables(self, f: h5py.File) -> None:
+    def _generate_photon_electron_condensed_tables(self, f: h5py.File) -> None:
         """Generate tables for photon-electron condensed history method."""
         
         # Photon interactions

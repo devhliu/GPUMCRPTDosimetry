@@ -9,14 +9,16 @@ from gpumcrpt.transport.engine_base import BaseTransportEngine
 from gpumcrpt.transport.triton_kernels.photon.flight import photon_woodcock_flight_kernel_philox
 from gpumcrpt.transport.triton_kernels.photon.interactions import photon_interaction_kernel
 
+from gpumcrpt.utils.constants import ELECTRON_REST_MASS_MEV
+
 
 @dataclass
-class PhotonOnlyStats:
+class PhotonElectronLocalStats:
     escaped_energy_MeV: float
 
 
-class PhotonOnlyTransportEngine(BaseTransportEngine):
-    """PhotonOnly backend: photon-only transport (GPU/Triton).
+class PhotonElectronLocalTransportEngine(BaseTransportEngine):
+    """Photon-electron-local backend: photon transport + local charged-particle deposit (GPU/Triton).
 
     - Woodcock flight using tables.sigma_total + sigma_max
     - Interaction classification via per-material xs (PE/Compton/Rayleigh/Pair)
@@ -48,10 +50,10 @@ class PhotonOnlyTransportEngine(BaseTransportEngine):
             device=device,
         )
         
-        self._last_stats = PhotonOnlyStats(escaped_energy_MeV=0.0)
+        self._last_stats = PhotonElectronLocalStats(escaped_energy_MeV=0.0)
 
     @property
-    def last_stats(self) -> PhotonOnlyStats:
+    def last_stats(self) -> PhotonElectronLocalStats:
         return self._last_stats
 
     @torch.no_grad()
@@ -82,7 +84,7 @@ class PhotonOnlyTransportEngine(BaseTransportEngine):
 
         N = int(E.numel())
         if N == 0:
-            self._last_stats = PhotonOnlyStats(escaped_energy_MeV=0.0)
+            self._last_stats = PhotonElectronLocalStats(escaped_energy_MeV=0.0)
             return edep
 
         # RNG seed for Triton kernels (Philox - stateless)
@@ -208,7 +210,7 @@ class PhotonOnlyTransportEngine(BaseTransportEngine):
                 real,
                 pos2, dir2, E2, w2, ebin2,
                 material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo, self.tables.sigma_compton, 
+                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_rayleigh,
                 self.tables.sigma_pair,
                 compton_inv_cdf, K,
                 seed,
@@ -222,7 +224,32 @@ class PhotonOnlyTransportEngine(BaseTransportEngine):
                 N=N,
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
-            
+
+            # Photon-electron-local mode: deposit charged-secondary energy locally.
+            # The fused kernel outputs secondaries but does not transport them here.
+            pair_mask = (out_ph_E == 0) & (out_e_E > 0) & (out_po_E > 0) & (out_ph_w > 0)
+            if torch.any(pair_mask):
+                pair_edep = out_e_E + out_po_E + (2.0 * ELECTRON_REST_MASS_MEV)
+                self._deposit_local(
+                    pos=out_ph_pos,
+                    E=torch.where(pair_mask, pair_edep, torch.zeros_like(pair_edep)),
+                    w=out_ph_w,
+                    edep_flat=edep.view(-1),
+                    Z=Z, Y=Y, X=X,
+                    voxel_size_cm=self.voxel_size_cm,
+                )
+
+            e_mask = (out_e_E > 0) & (out_ph_w > 0) & (~pair_mask)
+            if torch.any(e_mask):
+                self._deposit_local(
+                    pos=out_ph_pos,
+                    E=torch.where(e_mask, out_e_E, torch.zeros_like(out_e_E)),
+                    w=out_ph_w,
+                    edep_flat=edep.view(-1),
+                    Z=Z, Y=Y, X=X,
+                    voxel_size_cm=self.voxel_size_cm,
+                )
+
             # Update photon state after interaction
             pos2 = out_ph_pos
             dir2 = out_ph_dir
@@ -235,7 +262,7 @@ class PhotonOnlyTransportEngine(BaseTransportEngine):
                 pos2, dir2, E2, w2, ebin2
             )
 
-        self._last_stats = PhotonOnlyStats(escaped_energy_MeV=float(escaped_energy.detach().cpu().item()))
+        self._last_stats = PhotonElectronLocalStats(escaped_energy_MeV=float(escaped_energy.detach().cpu().item()))
         return edep
 
 

@@ -159,7 +159,7 @@ def main() -> None:
     parser.add_argument(
         "--physics_mode",
         required=True,
-        choices=["local_deposit", "photon_only", "photon_em_condensedhistory"],
+        choices=["local_deposit", "photon_electron_local", "photon_electron_condensed"],
         help="The physics mode for which to generate the tables.",
     )
     parser.add_argument(
@@ -219,7 +219,7 @@ def main() -> None:
     P_brem_per_cm = None
     P_delta_per_cm = None
 
-    if args.physics_mode in {"photon_only", "photon_em_condensedhistory"}:
+    if args.physics_mode in {"photon_electron_local", "photon_electron_condensed"}:
         ne_g = _electrons_per_gram(wfrac, element_Z, element_symbol).astype(np.float64)
         sigma_kn = _sigma_kn_total_per_electron_cm2(e_centers.astype(np.float64))
         sigma_compton[:, :] = (ne_g[:, None] * sigma_kn[None, :]).astype(np.float32)
@@ -241,7 +241,7 @@ def main() -> None:
     sigma_max = np.max(sigma_total, axis=0).astype(np.float32)
     p_cum = np.zeros_like(sigma_total, dtype=np.float32)
 
-    if args.physics_mode == "photon_em_condensedhistory":
+    if args.physics_mode == "photon_electron_condensed":
         rg = _csda_range_g_cm2(e_centers.astype(np.float64))
         for m in range(num_materials):
             range_csda_cm[m, :] = (rg / float(rho[m])).astype(np.float32)
@@ -252,13 +252,13 @@ def main() -> None:
         P_delta_per_cm = (0.01 * rho[:, None] * (E2[None, :] / 1.0)).astype(np.float32)
 
     compton_inv_cdf = None
-    if args.physics_mode in {"photon_only", "photon_em_condensedhistory"}:
+    if args.physics_mode in {"photon_electron_local", "photon_electron_condensed"}:
         print("Building Compton inverse-CDF (Klein–Nishina)...")
         compton_inv_cdf = build_kn_compton_inv_cdf(e_centers, K=int(args.compton_inv_cdf_bins))
 
     brem_inv = None
     delta_inv = None
-    if args.physics_mode == "photon_em_condensedhistory":
+    if args.physics_mode == "photon_electron_condensed":
         brem_inv = _make_inv_cdf_brems(ECOUNT=e_centers.size)
         delta_inv = _make_inv_cdf_delta(ECOUNT=e_centers.size)
 
@@ -277,7 +277,7 @@ def main() -> None:
         eg.create_dataset("edges_MeV", data=e_edges)
         eg.create_dataset("centers_MeV", data=e_centers)
 
-        if args.physics_mode in {"photon_only", "photon_em_condensedhistory"}:
+        if args.physics_mode in {"photon_electron_local", "photon_electron_condensed"}:
             ph = f.create_group("photons")
             ph.create_dataset("sigma_photo", data=sigma_photo)
             ph.create_dataset("sigma_compton", data=sigma_compton)
@@ -287,7 +287,7 @@ def main() -> None:
             ph.create_dataset("p_cum", data=p_cum)
             ph.create_dataset("sigma_max", data=sigma_max)
 
-        if args.physics_mode == "photon_em_condensedhistory":
+        if args.physics_mode == "photon_electron_condensed":
             el = f.create_group("electrons")
             el.create_dataset("S_restricted", data=S_restricted)
             el.create_dataset("range_csda_cm", data=range_csda_cm)

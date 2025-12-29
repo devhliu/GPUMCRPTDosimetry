@@ -8,8 +8,8 @@ GPUMCRPTDosimetry is a highly effective GPU-accelerated Monte Carlo radiation do
 
 dosimetry modes:
 - local_deposit: local deposition of photons and electrons & positrons
-- photon_only: local deposition of electrons & positrons, transport of photons
-- photon_em_condensedhistory: transport of photons, electron & positron transport with condensed history
+- photon_electron_local: local deposition of electrons & positrons, transport of photons
+- photon_electron_condensed: transport of photons, electron & positron transport with condensed history
 
 ### Core Submodules and Their Roles
 
@@ -210,7 +210,7 @@ dosimetry modes:
 
 ### Alternative Workflows
 
-- **Photon-Only Transport**: Simplified workflow for photon-only simulations
+- **Photon-Electron Local Transport**: Simplified workflow for photon_electron_local simulations
 - **Local Deposition Only**: MVP workflow for validation and testing
 - **CPU Oracle**: Reference implementation for validation
 
@@ -293,7 +293,7 @@ The system uses Triton for GPU acceleration with specialized kernels:
 ### Currently Implemented
 
 - Basic materials system with ICRU44 tables
-- Photon-only and local deposition transport
+- Photon-electron local and local deposition transport
 - ICRP107 decay database support
 - GPU acceleration with Triton
 - NIfTI file I/O

@@ -1,8 +1,8 @@
-# Photon Emission Condensed Method Configuration
-# This method uses condensed photon emission for dosimetry
+# Photon+Electron (Local Deposit) Method Configuration
+# This method transports photons and deposits charged-particle energy locally
 
 device: cuda
-seed: 12346
+seed: 12347
 
 io:
   resample_ct_to_activity: false
@@ -10,7 +10,7 @@ io:
 
 cutoffs:
   photon_keV: 30.0
-  electron_keV: 50.0
+  electron_keV: 100.0
 
 materials:
   name: "default_materials" # Name of the material library
@@ -48,11 +48,5 @@ monte_carlo:
   max_wavefront_iters: 100
 
   triton:
-    engine: em_condensed
-    method: photon_em_condensedhistory
-
-electron_transport:
-  secondary_depth: 2
-  max_secondaries_per_primary: 10
-  max_secondaries_per_step: 5
-  f_range: 0.1
+    engine: photon_electron_local
+    method: photon_electron_local

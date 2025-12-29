@@ -81,6 +81,18 @@ def load_physics_tables_h5(path: str, device: str = "cuda") -> PhysicsTables:
         centers = np.asarray(f["/energy/centers_MeV"], dtype=np.float32)
 
         physics_mode = f.attrs.get('physics_mode', 'unknown')
+        if isinstance(physics_mode, bytes):
+            physics_mode = physics_mode.decode('utf-8')
+
+        if physics_mode not in {
+            "photon_electron_local",
+            "photon_electron_condensed",
+            "photon_em_energybucketed",
+        }:
+            raise ValueError(
+                f"Unsupported physics_mode={physics_mode!r} in {path}. "
+                "Expected one of: 'photon_electron_local', 'photon_electron_condensed', 'photon_em_energybucketed'."
+            )
         
         # Initialize with zeros, then fill based on physics_mode
         dummy_shape = (len(mat_names), len(centers))
@@ -102,7 +114,7 @@ def load_physics_tables_h5(path: str, device: str = "cuda") -> PhysicsTables:
         brem_inv = None
         delta_inv = None
 
-        if physics_mode in ['photon_only', 'photon_em_condensedhistory']:
+        if physics_mode in ['photon_electron_local', 'photon_electron_condensed']:
             ph = "/photons"
             sigma_photo = np.asarray(f[f"{ph}/sigma_photo"], dtype=np.float32)
             sigma_compton = np.asarray(f[f"{ph}/sigma_compton"], dtype=np.float32)
@@ -112,7 +124,7 @@ def load_physics_tables_h5(path: str, device: str = "cuda") -> PhysicsTables:
             p_cum = np.asarray(f[f"{ph}/p_cum"], dtype=np.float32)
             sigma_max = np.asarray(f[f"{ph}/sigma_max"], dtype=np.float32)
 
-        if physics_mode == 'photon_em_condensedhistory':
+        if physics_mode == 'photon_electron_condensed':
             el = "/electrons"
             S_restricted = np.asarray(f[f"{el}/S_restricted"], dtype=np.float32)
             range_csda_cm = np.asarray(f[f"{el}/range_csda_cm"], dtype=np.float32)

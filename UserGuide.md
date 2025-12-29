@@ -291,7 +291,7 @@ io:
 
 # Physics model selection
 physics:
-  transport_model: "em_condensed"  # Options: mvp, photon_only, em_condensed
+  transport_model: "photon_electron_condensed"  # Options: mvp, photon_electron_local, photon_electron_condensed
   include_relaxation: false
   include_bremsstrahlung: true
 ```
@@ -365,8 +365,8 @@ simulation:
 
 Choose appropriate transport model based on accuracy requirements:
 
-- `photon_only`: Fastest, photons only
-- `em_condensed`: Balanced, electrons/positrons with condensed history
+- `photon_electron_local`: Fastest, photons only
+- `photon_electron_condensed`: Balanced, electrons/positrons with condensed history
 - `full_physics`: Most accurate, complete physics (when available)
 
 ## Output Analysis
@@ -465,10 +465,10 @@ python scripts/build_toy_physics_h5.py --out custom_physics.h5
 Access low-level transport engines:
 
 ```python
-from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
+from gpumcrpt.transport.engine_gpu_triton_photon_electron_condensed import TritonPhotonElectronCondensedEngine
 
 # Custom transport configuration
-transport_engine = TritonPhotonEMCondensedHistoryEngine(
+transport_engine = TritonPhotonElectronCondensedEngine(
     mats=materials_volume,
     tables=physics_tables,
     sim_config=custom_config,
@@ -507,7 +507,7 @@ print(f"Affine: {img.affine}")
 **Problem**: Slow simulation
 **Solution**: Use appropriate transport model and GPU
 
-- Use `photon_only` for quick estimates
+- Use `photon_electron_local` for quick estimates
 - Ensure CUDA is properly configured
 - Check GPU utilization during simulation
 

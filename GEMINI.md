@@ -55,7 +55,7 @@ There are two primary ways to run a simulation:
     import yaml
 
     # Load configuration
-    with open("src/gpumcrpt/configs/method_photon_em_condensed.yaml", "r") as f:
+    with open("src/gpumcrpt/configs/method_photon_electron_condensed.yaml", "r") as f:
         sim_config = yaml.safe_load(f)
 
     # Run dosimetry calculation

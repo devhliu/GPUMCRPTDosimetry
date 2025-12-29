@@ -1504,7 +1504,7 @@ Great! I have successfully completed all the tasks related to removing code redu
    - Updated multiple engine implementations to inherit from BaseTransportEngine
    - Removed duplicate energy deposition functions
    - Unified photon flight implementations across different engines
-   - Updated energy bucketed, condensed history, and photon-only engines to use fused kernels
+   - Updated energy bucketed, condensed history, and photon-electron-local engines to use fused kernels
 4. Code Quality Improvements :
    
    - Fixed structural issues in the energybucketed engine file

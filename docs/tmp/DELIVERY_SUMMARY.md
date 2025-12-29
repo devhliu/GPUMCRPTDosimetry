@@ -188,7 +188,7 @@ tests/
 ├── test_physics_validation.py        (11 KB) - Physics correctness
 ├── test_integration.py               (11 KB) - Workflow integration
 ├── test_gpu_performance.py           (9.9 KB) - GPU performance
-└── test_smoke_em_condensed.py        (existing, 4.6 KB)
+└── test_smoke_photon_electron_condensed.py        (existing, 4.6 KB)
 ```
 
 ### Documentation Files
@@ -219,7 +219,7 @@ pytest tests/test_physics_validation.py tests/test_integration.py -v
 ### Full Suite
 ```bash
 # With GPU tests (auto-skips on CPU-only)
-pytest tests/ -v --ignore tests/test_smoke_em_condensed.py
+pytest tests/ -v --ignore tests/test_smoke_photon_electron_condensed.py
 # Output: 37 passed ✅
 ```
 

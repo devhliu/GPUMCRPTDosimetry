@@ -44,19 +44,25 @@ class TransportEngine:
 
         # Import locally to avoid circular imports
         from gpumcrpt.transport.engine_gpu_triton_localdeposit_only import LocalDepositOnlyTransportEngine
-        from gpumcrpt.transport.engine_gpu_triton_photon_only import PhotonOnlyTransportEngine
-        from gpumcrpt.transport.engine_gpu_triton_photon_em_condensedhistory import TritonPhotonEMCondensedHistoryEngine
+        from gpumcrpt.transport.engine_gpu_triton_photon_electron_local import PhotonElectronLocalTransportEngine
+        from gpumcrpt.transport.engine_gpu_triton_photon_electron_condensed import TritonPhotonElectronCondensedEngine
         from gpumcrpt.transport.engine_gpu_triton_photon_em_energybucketed import TritonPhotonEMEnergyBucketedGraphsEngine
 
-        if triton_engine == "em_condensed" or triton_engine == "photon-em-condensedhistorymultiparticle":
-            tr_engine = TritonPhotonEMCondensedHistoryEngine(
+        if triton_engine in {"photon_electron_condensed"}:
+            tr_engine = TritonPhotonElectronCondensedEngine(
                 mats=self.mats,
                 tables=self.tables,
                 sim_config=self.sim_config,
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine == "em_energybucketed" or triton_engine == "photon-em-energybucketed":
+        elif triton_engine in {
+            "em_energybucketed",
+            "photon-em-energybucketed",
+            "photon_em_energybucketed",
+            "energy_bucketed",
+            "energybucketed",
+        }:
             tr_engine = TritonPhotonEMEnergyBucketedGraphsEngine(
                 mats=self.mats,
                 tables=self.tables,
@@ -64,16 +70,15 @@ class TransportEngine:
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine == "photon_only" or triton_engine == "photononly":
-            tr_engine = PhotonOnlyTransportEngine(
+        elif triton_engine in {"photon_electron_local"}:
+            tr_engine = PhotonElectronLocalTransportEngine(
                 mats=self.mats,
                 tables=self.tables,
                 sim_config=self.sim_config,
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine == "mvp" or triton_engine == "localdepositonly":
-            # LocalDepositOnly engine: local-deposition transport (runnable end-to-end).
+        elif triton_engine in {"mvp", "localdepositonly", "local_deposit", "local-deposit"}:
             tr_engine = LocalDepositOnlyTransportEngine(
                 mats=self.mats,
                 tables=self.tables,
@@ -83,7 +88,11 @@ class TransportEngine:
             )
         else:
             raise ValueError(
-                f"Unknown monte_carlo.triton.engine={triton_engine!r} (expected 'mvp'/'localdepositonly', 'photon_only'/'photononly', 'em_condensed'/'photon-em-condensedhistorymultiparticle', or 'em_energybucketed'/'photon-em-energybucketed')"
+                f"Unknown monte_carlo.triton.engine={triton_engine!r} (expected "
+                "'mvp'/'localdepositonly'/'local_deposit', "
+                "'photon_electron_local', "
+                "'photon_electron_condensed', "
+                "or 'em_energybucketed'/'photon-em-energybucketed')"
             )
 
         n_ph = int(primaries.photons["E_MeV"].shape[0])

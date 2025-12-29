@@ -10,7 +10,7 @@ This document outlines a prioritized action plan to improve the GPUMCRPTDosimetr
 **Impact: 10-100x speedup | Risk: Low | Effort: Medium**
 
 ### 1.1 Move Buffer Allocations Outside Loop (P0)
-**File**: `engine_gpu_triton_photon_em_condensedhistory.py`
+**File**: `engine_gpu_triton_photon_electron_condensed.py`
 **Impact**: Eliminates ~1.2 million tensor allocations per simulation
 **Risk**: Low - simple refactoring
 
@@ -82,7 +82,7 @@ def photon_interaction_kernel(...):
 ---
 
 ### 1.3 Set Reasonable Secondary Particle Limits (P0)
-**File**: `configs/method_photon_em_condensed.yaml`
+**File**: `configs/method_photon_electron_condensed.yaml`
 **Impact**: Prevents exponential secondary particle explosion
 **Risk**: Low - configuration change only
 
@@ -135,7 +135,7 @@ def compact_kernel(
 ---
 
 ### 2.2 Optimize Secondary Particle Handling (P1)
-**File**: `engine_gpu_triton_photon_em_condensedhistory.py`
+**File**: `engine_gpu_triton_photon_electron_condensed.py`
 **Impact**: Reduces kernel launch overhead
 **Risk**: Medium - requires refactoring
 
@@ -209,7 +209,7 @@ delta_energy = E_new * (u6 * 0.5)
 ---
 
 ### 3.3 Clarify Photoelectric Handling (P2)
-**File**: `engine_gpu_triton_photon_em_condensedhistory.py`
+**File**: `engine_gpu_triton_photon_electron_condensed.py`
 **Impact**: Consistent physics model
 **Risk: Medium - requires decision on approach**
 
@@ -225,7 +225,7 @@ delta_energy = E_new * (u6 * 0.5)
 ```python
 # Deposit all photoelectric energy locally
 # Skip relaxation kernel
-# Consistent with photon_only mode
+# Consistent with photon_electron_local mode
 ```
 
 **Recommendation**: Option B for dosimetry (photoelectric electrons have short range)
@@ -337,7 +337,7 @@ class PerformanceProfiler:
 ---
 
 ### 5.2 Wavefront Optimization (P4)
-**File**: `engine_gpu_triton_photon_em_condensedhistory.py`
+**File**: `engine_gpu_triton_photon_electron_condensed.py`
 **Impact**: Better particle load balancing
 **Risk**: High - requires algorithm redesign
 
@@ -396,7 +396,7 @@ class PerformanceProfiler:
 ## Success Metrics
 
 ### Performance Metrics
-- **Target**: 20-100x speedup for photon_em_condensed mode
+- **Target**: 20-100x speedup for photon_electron_condensed mode
 - **Baseline**: Current performance on case001 example
 - **Measurement**: Particles per second, wall-clock time
 
@@ -434,12 +434,12 @@ The plan is designed to be incremental, with each phase providing measurable imp
 
 ## Key Root Causes
 ### GPU Performance Issues
-1. Critical Memory Allocation Overhead : In photon_em_condensed mode, output buffers are allocated inside the main loop (up to 100 iterations), creating ~1.2 million tensor allocations for N=10,000 particles. This is the single biggest performance bottleneck.
+1. Critical Memory Allocation Overhead : In photon_electron_condensed mode, output buffers are allocated inside the main loop (up to 100 iterations), creating ~1.2 million tensor allocations for N=10,000 particles. This is the single biggest performance bottleneck.
 2. CPU-GPU Synchronization : The select_indices_with_budget function uses torch.nonzero() and torch.index_select() which cause CPU-GPU synchronization, blocking GPU execution multiple times per iteration.
 3. Suboptimal Kernel Configuration : The photon interaction kernel lacks autotuning (unlike the flight kernel), potentially missing optimal configurations.
 4. Excessive Secondary Handling : Default max_secondaries_per_primary=1_000_000_000 can spawn overwhelming numbers of secondary particles.
 ### Physics Approximation Issues
-1. Inconsistent Photoelectric Handling : Photon_em_condensed mode deposits all energy locally but then calls a complex relaxation kernel - this is inconsistent and unclear.
+1. Inconsistent Photoelectric Handling : photon_electron_condensed mode deposits all energy locally but then calls a complex relaxation kernel - this is inconsistent and unclear.
 2. Crude Secondary Production : Bremsstrahlung and delta ray sampling use very simplified approximations (E × u × 0.3 and E × u × 0.5 respectively).
 3. Lack of Documentation : Physics approximations are not clearly documented, making it difficult to understand accuracy trade-offs.
 ## Priority Improvements
@@ -454,4 +454,4 @@ Medium Priority (Physics Clarity):
 - Clarify photoelectric handling approach
 - Improve secondary particle sampling accuracy
 - Add comprehensive physics approximation documentation
-The photon_only mode is better optimized (buffers allocated once, no secondary handling), which explains its better performance. The photon_em_condensed mode's complexity comes from handling secondary particles but suffers from poor implementation choices.
+The photon_electron_local mode is better optimized (buffers allocated once, no secondary handling), which explains its better performance. The photon_electron_condensed mode's complexity comes from handling secondary particles but suffers from poor implementation choices.

@@ -129,7 +129,7 @@ pytest tests/test_gpu_performance.py -v -s
 
 ---
 
-### 4. Existing Smoke Test (`test_smoke_em_condensed.py`)
+### 4. Existing Smoke Test (`test_smoke_photon_electron_condensed.py`)
 
 **Purpose**: Quick verification that all imports and basic functionality work
 
@@ -143,7 +143,7 @@ pytest tests/test_gpu_performance.py -v -s
 
 **Run**:
 ```bash
-pytest tests/test_smoke_em_condensed.py -v
+pytest tests/test_smoke_photon_electron_condensed.py -v
 ```
 
 ---

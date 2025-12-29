@@ -85,8 +85,8 @@ src/gpumcrpt/
 ├── transport/               # Particle transport engines
 │   ├── engine.py            # Transport engine selector
 	│   ├── engine_gpu_triton_localdepositonly.py          # Local deposition MVP
-	│   ├── engine_gpu_triton_photon_em_condensedhistory.py # Full EM condensed history
-│   ├── engine_gpu_triton_photon_only.py  # Photon-only mode
+	│   ├── engine_gpu_triton_photon_electron_condensed.py # Full EM condensed history
+│   ├── engine_gpu_triton_photon_electron_local.py  # Photon-electron local mode
 │   ├── triton/              # Triton GPU kernels
 │   │   ├── photon_flight.py              # Woodcock flight
 │   │   ├── photon_interactions.py        # Photon classification
@@ -220,7 +220,7 @@ monte_carlo:
   n_histories: 1000000
   n_batches: 10
   triton:
-    engine: "em_condensed"  # or "mvp", "photon_only"
+    engine: "photon_electron_condensed"  # or "mvp", "photon_electron_local"
     allow_placeholder_samplers: false
 
 cutoffs:
@@ -313,7 +313,7 @@ Designed for clinical-scale simulations:
 This is a research prototype currently under active development. The package follows a milestone-based development approach:
 
 - **Milestone 1**: Runnable MVP with local energy deposition
-- **Milestone 2**: Photon-only transport implementation
+- **Milestone 2**: Photon-electron local transport implementation
 - **Milestone 3**: Electron/positron condensed-history transport
 - **Milestone 4**: Clinical realism with material compositions
 - **Milestone 5**: Full physics validation and optimization

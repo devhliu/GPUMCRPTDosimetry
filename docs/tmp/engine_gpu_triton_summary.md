@@ -44,12 +44,12 @@ Accumulate E×w in edep[z,y,x]
 
 ---
 
-## 2. PhotonOnly
+## 2. photon_electron_local
 
-**File:** `engine_gpu_triton_photon_only.py`
+**File:** `engine_gpu_triton_photon_electron_local.py`
 
 ### Design
-- **Photon-only wavefront** (electrons/positrons deposited locally)
+- **Photon-electron local wavefront** (electrons/positrons deposited locally)
 - Woodcock flight with density-scaled cross-sections
 - Interaction classification (PE, Compton, Rayleigh, Pair)
 - Charged secondaries (Compton electrons) deposited locally
@@ -103,7 +103,7 @@ Pair kernel (kill photon) → edep local
 
 ## 3. Photon-EM-CondensedHistoryMultiParticle
 
-**File:** `engine_gpu_triton_photon_em_condensedhistory.py`
+**File:** `engine_gpu_triton_photon_electron_condensed.py`
 
 ### Design
 - **Full photon + electron/positron transport** (MVP scope)
@@ -432,7 +432,7 @@ def compact_and_append_relaxation_products(
 
 ## Comparison Table
 
-| Feature | LocalDepositOnly | PhotonOnly | Photon-EM-Condensed | Photon-EM-BucketedGraphs | Photon-EM-BankSoA | Photon-EM-LazySync |
+| Feature | LocalDepositOnly | photon_electron_local | photon_electron_condensed | Photon-EM-BucketedGraphs | Photon-EM-BankSoA | Photon-EM-LazySync |
 |---------|-----|-------------|--------------|------------------|------------------|-----------------|
 | **Photon transport** | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Electron transport** | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
@@ -457,7 +457,7 @@ def compact_and_append_relaxation_products(
 ```
 LocalDepositOnly (Milestone 1)
   └─ Deposit locally, test infrastructure
-PhotonOnly (Milestone 2)
+photon_electron_local (Milestone 2)
   └─ Woodcock flight + interactions
 Photon-EM-CondensedHistoryMultiParticle (Milestone 3) ◄─── CURRENT PRODUCTION
   └─ Full photon + e-/e+ transport
@@ -481,7 +481,7 @@ Photon-EM-LazyCompactionSingleSync (Phase 11) ◄─── RESEARCH PROTOTYPE
 | Scenario | Recommended | Reason |
 |----------|-------------|--------|
 | **Proof-of-concept** | LocalDepositOnly | Fast setup, minimal dependencies |
-| **Photon-only dosimetry** | PhotonOnly | Woodcock accurate, well-optimized |
+| **Photon-electron local dosimetry** | photon_electron_local | Woodcock accurate, well-optimized |
 | **Routine clinical** | Photon-EM-CondensedHistoryMultiParticle | Production-ready, all physics |
 | **Large-scale batch** | Photon-EM-EnergyBucketedPersistentGraphs | CUDA graph overhead amortized (50× speedup) |
 | **Multi-step relaxation** | Photon-EM-BankSoAVacancyRelaxation | Vacancy + relaxation cascade, Philox RNG |
@@ -508,7 +508,7 @@ Photon-EM-LazyCompactionSingleSync (Phase 11) ◄─── RESEARCH PROTOTYPE
 The GPUMCRPTDosimetry engine has evolved through **6 major architectures**:
 
 1. **LocalDepositOnly**: Proof-of-concept infrastructure (Milestone 1)
-2. **PhotonOnly**: First physics transport (Milestone 2, validated Woodcock algorithm)
+2. **photon_electron_local**: First physics transport (Milestone 2, validated Woodcock algorithm)
 3. **Photon-EM-CondensedHistoryMultiParticle**: Full particle transport with condensed-history (Milestone 3, PRODUCTION TIER)
 4. **Photon-EM-EnergyBucketedPersistentGraphs**: CUDA graph capture for 50× launch overhead reduction (Phase 7)
 5. **Photon-EM-BankSoAVacancyRelaxation**: SoA bank architecture with vacancy cascades (Phase 10, research-ready)
