@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import os
 import yaml
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
-import torch
 
-from gpumcrpt.materials.hu_materials import MaterialsLibrary, build_materials_library_from_config
 
 
 @dataclass

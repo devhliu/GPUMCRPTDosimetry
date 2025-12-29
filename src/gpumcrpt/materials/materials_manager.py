@@ -10,7 +10,6 @@ from typing import Dict, List, Optional
 import torch
 
 from gpumcrpt.materials.hu_materials import (
-    MaterialsLibrary, 
     MaterialsVolume, 
     build_materials_from_hu,
     build_materials_library_from_config

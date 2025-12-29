@@ -1,0 +1,51 @@
+# Photon Emission Energy Bucketed Method Configuration
+# This method uses energy bucketed photon emission for dosimetry
+
+device: cuda
+seed: 12348
+
+io:
+  resample_ct_to_activity: false
+  output_uncertainty: relative
+
+cutoffs:
+  photon_keV: 3.0
+  electron_keV: 20.0
+
+materials:
+  name: "default_materials"
+  hu_to_density:
+    - [-1000, 0.0012]
+    - [-900, 0.26]
+    - [-100, 0.95]
+    - [0, 1.00]
+    - [40, 1.06]
+    - [500, 1.16]
+    - [1200, 1.85]
+  hu_to_class:
+    - [-1000, -850, 0]
+    - [-950, -850, 1]
+    - [-100, -50, 2]
+    - [0, 50, 3]
+    - [40, 100, 4]
+    - [300, 800, 5]
+    - [800, 2000, 6]
+
+physics_tables:
+  directory: "src/gpumcrpt/physics_tables/precomputed_tables"
+
+decaydb:
+  type: icrp107_json
+  path: src/gpumcrpt/decaydb/icrp107_database/icrp107
+
+nuclide:
+  name: "Lu-177"
+
+monte_carlo:
+  n_histories: 10000
+  n_batches: 20
+  max_wavefront_iters: 10
+
+  triton:
+    engine: em_energybucketed
+    method: photon_em_energybucketed

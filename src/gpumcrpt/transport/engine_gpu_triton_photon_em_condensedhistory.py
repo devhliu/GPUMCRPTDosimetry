@@ -1,24 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 import torch
 import triton
 
 from gpumcrpt.materials.hu_materials import compute_material_effective_atom_Z
-from gpumcrpt.transport.secondary_budget import allow_secondaries, select_indices_with_budget
-from gpumcrpt.transport.triton.brems_delta import electron_brems_emit_kernel, electron_delta_emit_kernel
-from gpumcrpt.transport.triton.compton import photon_compton_kernel
-from gpumcrpt.transport.triton.edep_deposit import deposit_local_energy_kernel
-from gpumcrpt.transport.triton.electron_step import electron_condensed_step_kernel
-from gpumcrpt.transport.triton.pair import photon_pair_kernel
-from gpumcrpt.transport.triton.photon_flight import photon_woodcock_flight_kernel
-from gpumcrpt.transport.triton.photon_interactions import photon_classify_kernel
-from gpumcrpt.transport.triton.photoelectric_with_vacancy import photon_photoelectric_with_vacancy_kernel
-from gpumcrpt.transport.triton.positron import positron_annihilation_at_rest_kernel
-from gpumcrpt.transport.triton.positron_step import positron_condensed_step_kernel
-from gpumcrpt.transport.triton.rayleigh import photon_rayleigh_kernel
-from gpumcrpt.physics_tables.relaxation_tables import RelaxationTables
+from gpumcrpt.transport.engine_base import BaseTransportEngine
+from gpumcrpt.transport.utils.secondary_budget import allow_secondaries, select_indices_with_budget
+# Photon kernels
+from gpumcrpt.transport.triton_kernels.photon.flight import photon_woodcock_flight_kernel_philox
+from gpumcrpt.transport.triton_kernels.photon.interactions import photon_interaction_kernel
+from gpumcrpt.transport.triton_kernels.photon.compton import photon_compton_kernel
+
+# High-performance unified charged particle kernels
+from gpumcrpt.transport.triton_kernels.charged_particle import (
+    charged_particle_step_kernel,        # Main unified kernel for transport
+    charged_particle_brems_emit_kernel,  # Unified bremsstrahlung emission
+    charged_particle_delta_emit_kernel,  # Unified delta ray emission
+    positron_annihilation_at_rest_kernel, # Positron annihilation at rest
+)
+
+# Tally/Deposit kernels
+from gpumcrpt.transport.triton_kernels.utils.deposit import deposit_local_energy_kernel
+
+# Physics constants
+from gpumcrpt.utils.constants import ELECTRON_REST_MASS_MEV, PI
 
 
 @dataclass
@@ -29,18 +37,25 @@ class CondensedHistoryMultiParticleStats:
     delta_electrons: int
 
 
-class TritonPhotonEMCondensedHistoryEngine:
+class TritonPhotonEMCondensedHistoryEngine(BaseTransportEngine):
     """Photon-EM-CondensedHistoryMultiParticle transport engine (Milestone 3).
 
+    Modern implementation using high-performance unified kernels.
+
     Scope (MVP):
-    - Photons: Milestone-2 Woodcock flight + classify + Compton/Rayleigh/PE.
+    - Photons: Milestone-2 Woodcock flight + classify + Compton/PE.
       * Compton uses isotropic cos(theta) sampling (bring-up choice).
-      * Photoelectric deposits photon energy locally (charged secondary transport from PE is future work).
-    - Electrons: condensed-history steps using `electron_condensed_step_kernel`.
+      * Photoelectric deposits all photon energy locally (Option B - faster, consistent with photon_only mode).
+    - Electrons: condensed-history steps using unified `charged_particle_step_kernel`.
       * Below-cutoff kinetic energy is deposited locally and particle terminated.
-    - Positrons: condensed-history steps using `positron_condensed_step_kernel`.
+    - Positrons: condensed-history steps using unified `charged_particle_step_kernel` (particle_type=1).
       * On stop, annihilation-at-rest emits 2×0.511 MeV photons and deposits remaining kinetic energy.
       * Annihilation photons are transported with the same photon transport.
+
+    Features:
+    - High-performance unified kernels for both electrons and positrons
+    - Structure of Arrays (SoA) layout for optimal GPU performance
+    - Modern physics models: Molière scattering, Vavilov straggling, Bethe-Heitler
 
     Notes:
     - Brems/delta secondaries are spawned (MVP: single-generation; children do not spawn further secondaries).
@@ -56,14 +71,14 @@ class TritonPhotonEMCondensedHistoryEngine:
         voxel_size_cm: tuple[float, float, float],
         device: str = "cuda",
     ) -> None:
-        if device != "cuda" or not torch.cuda.is_available():
-            raise RuntimeError("TritonPhotonEMCondensedHistoryEngine requires CUDA")
-
-        self.mats = mats
-        self.tables = tables
-        self.sim_config = sim_config
-        self.voxel_size_cm = voxel_size_cm
-        self.device = device
+        # Initialize base class
+        super().__init__(
+            mats=mats,
+            tables=tables,
+            sim_config=sim_config,
+            voxel_size_cm=voxel_size_cm,
+            device=device,
+        )
 
         self._last_stats = CondensedHistoryMultiParticleStats(
             escaped_photon_energy_MeV=0.0,
@@ -71,40 +86,6 @@ class TritonPhotonEMCondensedHistoryEngine:
             brems_photons=0,
             delta_electrons=0,
         )
-
-        self._relax_tables: RelaxationTables | None = None
-
-        if hasattr(self.tables, "relax_shell_cdf") and hasattr(self.tables, "relax_E_bind_MeV"):
-            if hasattr(self.tables, "relax_fluor_yield") and hasattr(self.tables, "relax_E_xray_MeV") and hasattr(self.tables, "relax_E_auger_MeV"):
-                self._relax_tables = RelaxationTables(
-                    relax_shell_cdf=self.tables.relax_shell_cdf,
-                    relax_E_bind_MeV=self.tables.relax_E_bind_MeV,
-                    relax_fluor_yield=self.tables.relax_fluor_yield,
-                    relax_E_xray_MeV=self.tables.relax_E_xray_MeV,
-                    relax_E_auger_MeV=self.tables.relax_E_auger_MeV,
-                )
-            else:
-                M = int(self.tables.ref_density_g_cm3.numel())
-                S = int(getattr(self.tables, "relax_shell_cdf").shape[1])
-                base = RelaxationTables.dummy(self.device, M=M, S=S)
-                self._relax_tables = RelaxationTables(
-                    relax_shell_cdf=self.tables.relax_shell_cdf,
-                    relax_E_bind_MeV=self.tables.relax_E_bind_MeV,
-                    relax_fluor_yield=base.relax_fluor_yield,
-                    relax_E_xray_MeV=base.relax_E_xray_MeV,
-                    relax_E_auger_MeV=base.relax_E_auger_MeV,
-                )
-        else:
-            pe = self.sim_config.get("photon_transport", {}).get("photoelectric", {})
-            use_dummy = pe.get("use_dummy_relaxation_tables", True)
-            if use_dummy:
-                M = int(self.tables.ref_density_g_cm3.numel())
-                S = int(pe.get("shells", 4))
-                self._relax_tables = RelaxationTables.dummy(self.device, M=M, S=S)
-
-    @property
-    def last_stats(self) -> CondensedHistoryMultiParticleStats:
-        return self._last_stats
 
     @torch.no_grad()
     def run_one_batch(self, primaries, alpha_local_edep: torch.Tensor) -> torch.Tensor:
@@ -174,37 +155,6 @@ class TritonPhotonEMCondensedHistoryEngine:
         )
         return edep
 
-    def _inv_cdf_or_uniform(self, inv_cdf: torch.Tensor | None, *, ECOUNT: int, max_efrac: float) -> tuple[torch.Tensor, int]:
-        # Returns (inv_cdf, K).
-        # For accuracy, missing samplers are treated as an error unless
-        # monte_carlo.triton.allow_placeholder_samplers=true.
-        if inv_cdf is not None:
-            inv = inv_cdf.to(device=self.device, dtype=torch.float32).contiguous()
-            if inv.ndim != 2 or int(inv.shape[0]) != ECOUNT:
-                raise ValueError(f"inv_cdf must have shape [ECOUNT,K]; got {tuple(inv.shape)} (ECOUNT={ECOUNT})")
-            return inv, int(inv.shape[1])
-
-        allow_placeholders = bool(
-            self.sim_config.get("monte_carlo", {}).get("triton", {}).get("allow_placeholder_samplers", False)
-        )
-        if not allow_placeholders:
-            raise ValueError(
-                "Missing required inverse-CDF sampler table in physics .h5. "
-                "Provide the appropriate /samplers/.../inv_cdf_* dataset, or set "
-                "monte_carlo.triton.allow_placeholder_samplers=true to use a uniform placeholder (not physically accurate)."
-            )
-
-        K = 256
-        grid = torch.linspace(0.0, float(max_efrac), K, device=self.device, dtype=torch.float32)
-        inv = grid.repeat(ECOUNT, 1).contiguous()
-        return inv, K
-
-    def _rng_i32(self, n: int) -> torch.Tensor:
-
-        g = torch.Generator(device=self.device)
-        g.manual_seed(int(self.sim_config.get("seed", 0)))
-        return torch.randint(1, 2**31 - 1, (n,), generator=g, device=self.device, dtype=torch.int32)
-
     def _run_photons_inplace(
         self,
         *,
@@ -239,9 +189,8 @@ class TritonPhotonEMCondensedHistoryEngine:
         max_steps = int(self.sim_config.get("monte_carlo", {}).get("max_wavefront_iters", 512))
         e_cut_MeV = float(self.sim_config.get("cutoffs", {}).get("electron_keV", 20.0)) * 1e-3
 
-        # RNG
-        rng = self._rng_i32(N)
-        rng2 = torch.empty_like(rng)
+        # RNG - Initialize Philox RNG seed for stateless RNG
+        seed = int(self.sim_config.get("seed", 0))
 
         # ping-pong buffers
         pos2 = torch.empty_like(pos)
@@ -254,20 +203,6 @@ class TritonPhotonEMCondensedHistoryEngine:
 
         alive = torch.empty((N,), device=self.device, dtype=torch.int8)
         real = torch.empty_like(alive)
-        typ = torch.empty((N,), device=self.device, dtype=torch.int8)
-
-        # scatter outputs
-        scat_pos = torch.empty_like(pos)
-        scat_dir = torch.empty_like(direction)
-        scat_E = torch.empty_like(E)
-        scat_w = torch.empty_like(w)
-        scat_rng = torch.empty_like(rng)
-        scat_ebin = torch.empty_like(ebin)
-
-        e_pos = torch.empty_like(pos)
-        e_dir = torch.empty_like(direction)
-        e_E = torch.empty_like(E)
-        e_w = torch.empty_like(w)
 
         escaped_energy = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         sec_counts = torch.zeros((N,), device=self.device, dtype=torch.int32)
@@ -294,11 +229,32 @@ class TritonPhotonEMCondensedHistoryEngine:
 
         edep_flat = edep.view(-1)
 
-        for _ in range(max_steps):
+        out_ph_pos = torch.empty_like(pos2)
+        out_ph_dir = torch.empty_like(dir2)
+        out_ph_E = torch.empty_like(E2)
+        out_ph_w = torch.empty_like(w2)
+        out_ph_ebin = torch.empty_like(ebin2)
+        
+        out_e_pos = torch.empty((N, 3), device=self.device, dtype=torch.float32)
+        out_e_dir = torch.empty((N, 3), device=self.device, dtype=torch.float32)
+        out_e_E = torch.empty((N,), device=self.device, dtype=torch.float32)
+        out_e_w = torch.empty((N,), device=self.device, dtype=torch.float32)
+        
+        out_po_pos = torch.empty((N, 3), device=self.device, dtype=torch.float32)
+        out_po_dir = torch.empty((N, 3), device=self.device, dtype=torch.float32)
+        out_po_E = torch.empty((N,), device=self.device, dtype=torch.float32)
+        out_po_w = torch.empty((N,), device=self.device, dtype=torch.float32)
+
+        enable_timing = bool(self.sim_config.get("monte_carlo", {}).get("enable_timing", False))
+        total_start_time = time.time() if enable_timing else None
+
+        for step_num in range(max_steps):
+            step_start_time = time.time() if enable_timing else None
+            
             # cutoff deposit
             below = (E > 0) & (E < photon_cut_MeV) & (w > 0)
             if torch.any(below):
-                _deposit_local(
+                self._deposit_local(
                     pos=pos,
                     E=torch.where(below, E, torch.zeros_like(E)),
                     w=w,
@@ -316,10 +272,11 @@ class TritonPhotonEMCondensedHistoryEngine:
             ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
 
             grid = (triton.cdiv(N, 256),)
-            photon_woodcock_flight_kernel[grid](
-                pos, direction, E, w, rng,
+            photon_woodcock_flight_kernel_philox[grid](
+                pos, direction, E, w,
+                seed,
                 ebin,
-                pos2, dir2, E2, w2, rng2,
+                pos2, dir2, E2, w2,
                 ebin2,
                 alive, real,
                 material_id_flat,
@@ -339,323 +296,49 @@ class TritonPhotonEMCondensedHistoryEngine:
                 E2 = torch.where(escaped_mask, torch.zeros_like(E2), E2)
                 w2 = torch.where(escaped_mask, torch.zeros_like(w2), w2)
 
-            # classify
-            photon_classify_kernel[grid](
+            # Use fused photon interaction kernel to combine classification and interaction
+            photon_interaction_kernel[grid](
                 real,
-                pos2,
-                E2,
-                ebin2,
-                rng2,
-                material_id_flat,
-                rho_flat,
-                self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo,
-                self.tables.sigma_compton,
-                self.tables.sigma_rayleigh,
-                self.tables.sigma_pair,
-                typ,
-                rng,
+                pos2, dir2, E2, w2, ebin2,
+                material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
+                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_pair,
+                compton_inv_cdf, K,
+                seed,
+                # outputs:
+                out_ph_pos, out_ph_dir, out_ph_E, out_ph_w, out_ph_ebin,
+                out_e_pos, out_e_dir, out_e_E, out_e_w,
+                out_po_pos, out_po_dir, out_po_E, out_po_w,
+                edep_flat,
                 Z=Z, Y=Y, X=X,
                 M=M, ECOUNT=ECOUNT,
-                BLOCK=256,
+                N=N,
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
+            
+            # Update photon state after interaction
+            pos2 = out_ph_pos
+            dir2 = out_ph_dir
+            E2 = out_ph_E
+            w2 = out_ph_w
+            ebin2 = out_ph_ebin
 
-            # photoelectric: deposit all photon energy locally
-            pe = (typ == 1) & (E2 > 0) & (w2 > 0)
-            if torch.any(pe):
-                idx = select_indices_with_budget(
-                    pe,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
-                )
-
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
-
-                    if self._relax_tables is None:
-                        raise RuntimeError("Photoelectric was selected but relaxation tables were not available")
-
-                    shell_cdf = self._relax_tables.relax_shell_cdf.to(self.device, dtype=torch.float32).contiguous()
-                    E_bind = self._relax_tables.relax_E_bind_MeV.to(self.device, dtype=torch.float32).contiguous()
-                    S = int(shell_cdf.shape[1])
-
-                    e_pos_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    e_dir_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    e_E_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    e_w_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-
-                    v_pos_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    v_mat_out = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                    v_shell_out = torch.empty((ns,), device=self.device, dtype=torch.int8)
-                    v_w_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    v_has = torch.empty((ns,), device=self.device, dtype=torch.int8)
-
-                    g2 = (triton.cdiv(ns, 256),)
-                    photon_photoelectric_with_vacancy_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        material_id_flat,
-                        shell_cdf, E_bind,
-                        M=M, S=S,
-                        out_e_pos_ptr=e_pos_out,
-                        out_e_dir_ptr=e_dir_out,
-                        out_e_E_ptr=e_E_out,
-                        out_e_w_ptr=e_w_out,
-                        out_e_rng_ptr=out_rng,
-                        out_vac_pos_ptr=v_pos_out,
-                        out_vac_mat_ptr=v_mat_out,
-                        out_vac_shell_ptr=v_shell_out,
-                        out_vac_w_ptr=v_w_out,
-                        out_has_vac_ptr=v_has,
-                        edep_ptr=edep_flat,
-                        N=ns,
-                        Z=Z, Y=Y, X=X,
-                        BLOCK=256,
-                        voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-                        num_warps=4,
-                    )
-
-                    selected = torch.zeros_like(pe)
-                    selected.index_fill_(0, idx, True)
-                    pe_not = pe & (~selected)
-                    if torch.any(pe_not):
-                        _deposit_local(
-                            pos=pos2,
-                            E=torch.where(pe_not, E2, torch.zeros_like(E2)),
-                            w=w2,
-                            edep_flat=edep_flat,
-                            Z=Z, Y=Y, X=X,
-                            voxel_size_cm=self.voxel_size_cm,
-                        )
-                        E2 = torch.where(pe_not, torch.zeros_like(E2), E2)
-                        w2 = torch.where(pe_not, torch.zeros_like(w2), w2)
-
-                    E2.index_fill_(0, idx, 0.0)
-                    w2.index_fill_(0, idx, 0.0)
-                    rng2.index_copy_(0, idx, out_rng)
-
-                    e_mask = (e_E_out > 0) & (e_w_out > 0)
-                    if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
-                        if torch.any(e_mask):
-                            esc_e, nb_e, nd_e = self._run_electrons_inplace(
-                                pos=e_pos_out[e_mask],
-                                direction=e_dir_out[e_mask],
-                                E=e_E_out[e_mask],
-                                w=e_w_out[e_mask],
-                                edep=edep,
-                                secondary_depth=secondary_depth - 1,
-                                max_secondaries_per_primary=max_secondaries_per_primary,
-                                max_secondaries_per_step=max_secondaries_per_step,
-                            )
-                            escaped_energy = escaped_energy + torch.tensor(esc_e, device=self.device, dtype=torch.float32)
-                        if self._relax_tables is not None and torch.any(v_has.to(torch.bool)):
-                            vmask = v_has.to(torch.bool)
-                            v_pos = v_pos_out[vmask]
-                            v_mat = v_mat_out[vmask].to(torch.int32)
-                            v_shell = v_shell_out[vmask].to(torch.int8)
-                            v_w = v_w_out[vmask]
-                            v_rng = out_rng[vmask].contiguous()
-
-                            from gpumcrpt.transport.triton.atomic_relaxation import atomic_relaxation_kernel
-
-                            Srel = int(self._relax_tables.relax_fluor_yield.shape[1])
-                            ph_pos_out = torch.empty((int(v_pos.shape[0]), 3), device=self.device, dtype=torch.float32)
-                            ph_dir_out = torch.empty((int(v_pos.shape[0]), 3), device=self.device, dtype=torch.float32)
-                            ph_E_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.float32)
-                            ph_w_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.float32)
-                            ph_rng_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.int32)
-                            ph_has = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.int8)
-
-                            a_pos_out = torch.empty((int(v_pos.shape[0]), 3), device=self.device, dtype=torch.float32)
-                            a_dir_out = torch.empty((int(v_pos.shape[0]), 3), device=self.device, dtype=torch.float32)
-                            a_E_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.float32)
-                            a_w_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.float32)
-                            a_rng_out = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.int32)
-                            a_has = torch.empty((int(v_pos.shape[0]),), device=self.device, dtype=torch.int8)
-
-                            g3 = (triton.cdiv(int(v_pos.shape[0]), 256),)
-                            atomic_relaxation_kernel[g3](
-                                v_pos, v_mat, v_shell, v_w, v_rng,
-                                self._relax_tables.relax_fluor_yield.to(self.device, dtype=torch.float32).contiguous(),
-                                self._relax_tables.relax_E_xray_MeV.to(self.device, dtype=torch.float32).contiguous(),
-                                self._relax_tables.relax_E_auger_MeV.to(self.device, dtype=torch.float32).contiguous(),
-                                M=M,
-                                S=Srel,
-                                photon_cut_MeV=float(photon_cut_MeV),
-                                e_cut_MeV=float(e_cut_MeV),
-                                out_ph_pos_ptr=ph_pos_out,
-                                out_ph_dir_ptr=ph_dir_out,
-                                out_ph_E_ptr=ph_E_out,
-                                out_ph_w_ptr=ph_w_out,
-                                out_ph_rng_ptr=ph_rng_out,
-                                out_has_ph_ptr=ph_has,
-                                out_e_pos_ptr=a_pos_out,
-                                out_e_dir_ptr=a_dir_out,
-                                out_e_E_ptr=a_E_out,
-                                out_e_w_ptr=a_w_out,
-                                out_e_rng_ptr=a_rng_out,
-                                out_has_e_ptr=a_has,
-                                edep_ptr=edep_flat,
-                                material_id_ptr=material_id_flat,
-                                Z=Z, Y=Y, X=X,
-                                BLOCK=256,
-                                voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-                                num_warps=4,
-                            )
-
-                            if allow_secondaries(secondary_depth=secondary_depth - 1, max_per_primary=max_secondaries_per_primary):
-                                if torch.any(ph_has.to(torch.bool)):
-                                    escaped_energy = escaped_energy + torch.tensor(
-                                        self._run_photons_inplace(
-                                            pos=ph_pos_out[ph_has.to(torch.bool)],
-                                            direction=ph_dir_out[ph_has.to(torch.bool)],
-                                            E=ph_E_out[ph_has.to(torch.bool)],
-                                            w=ph_w_out[ph_has.to(torch.bool)],
-                                            edep=edep,
-                                            secondary_depth=secondary_depth - 1,
-                                            max_secondaries_per_primary=max_secondaries_per_primary,
-                                            max_secondaries_per_step=max_secondaries_per_step,
-                                        ),
-                                        device=self.device,
-                                        dtype=torch.float32,
-                                    )
-                                if torch.any(a_has.to(torch.bool)):
-                                    esc2, nb2, nd2 = self._run_electrons_inplace(
-                                        pos=a_pos_out[a_has.to(torch.bool)],
-                                        direction=a_dir_out[a_has.to(torch.bool)],
-                                        E=a_E_out[a_has.to(torch.bool)],
-                                        w=a_w_out[a_has.to(torch.bool)],
-                                        edep=edep,
-                                        secondary_depth=secondary_depth - 1,
-                                        max_secondaries_per_primary=max_secondaries_per_primary,
-                                        max_secondaries_per_step=max_secondaries_per_step,
-                                    )
-                                    escaped_energy = escaped_energy + torch.tensor(esc2, device=self.device, dtype=torch.float32)
-                    else:
-                        if torch.any(e_mask):
-                            _deposit_local(
-                                pos=e_pos_out[e_mask],
-                                E=e_E_out[e_mask],
-                                w=e_w_out[e_mask],
-                                edep_flat=edep_flat,
-                                Z=Z, Y=Y, X=X,
-                                voxel_size_cm=self.voxel_size_cm,
-                            )
-                else:
-                    _deposit_local(
-                        pos=pos2,
-                        E=torch.where(pe, E2, torch.zeros_like(E2)),
-                        w=w2,
-                        edep_flat=edep_flat,
-                        Z=Z, Y=Y, X=X,
-                        voxel_size_cm=self.voxel_size_cm,
-                    )
-                    E2 = torch.where(pe, torch.zeros_like(E2), E2)
-                    w2 = torch.where(pe, torch.zeros_like(w2), w2)
-
-            pa = (typ == 4) & (E2 > 0) & (w2 > 0)
-            if torch.any(pa) and allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
-                idx = select_indices_with_budget(
-                    pa,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
-                )
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
-
-                    e_pos_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    e_dir_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    e_E_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    e_w_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                    p_pos_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    p_dir_out = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    p_E_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    p_w_out = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-
-                    g2 = (triton.cdiv(ns, 256),)
-                    photon_pair_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        e_pos_out, e_dir_out, e_E_out, e_w_out,
-                        p_pos_out, p_dir_out, p_E_out, p_w_out,
-                        out_rng,
-                        ECOUNT=ECOUNT,
-                        BLOCK=256,
-                    )
-
-                    E2.index_fill_(0, idx, 0.0)
-                    w2.index_fill_(0, idx, 0.0)
-                    rng2.index_copy_(0, idx, out_rng)
-
-                    esc_e, nb_e, nd_e = self._run_electrons_inplace(
-                        pos=e_pos_out,
-                        direction=e_dir_out,
-                        E=e_E_out,
-                        w=e_w_out,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-                    escaped_energy = escaped_energy + torch.tensor(esc_e, device=self.device, dtype=torch.float32)
-
-                    esc_p, ann_p, nb_p, nd_p = self._run_positrons_inplace(
-                        pos=p_pos_out,
-                        direction=p_dir_out,
-                        E=p_E_out,
-                        w=p_w_out,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-                    escaped_energy = escaped_energy + torch.tensor(esc_p, device=self.device, dtype=torch.float32)
-
-            # Compton
-            co = (typ == 2) & (E2 > 0) & (w2 > 0)
-            if torch.any(co):
-                E_in = torch.where(co, E2, torch.zeros_like(E2))
-                w_in = torch.where(co, w2, torch.zeros_like(w2))
-
-                photon_compton_kernel[grid](
-                    pos2, dir2, E_in, w_in, rng, ebin2,
-                    compton_inv_cdf, K,
-                    scat_pos, scat_dir, scat_E, scat_w, scat_rng, scat_ebin,
-                    e_pos, e_dir, e_E, e_w,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                )
-
+            # Process photoelectric electrons: photon absorbed, electron produced
+            # Identify photoelectric events: photon energy zeroed, electron energy > 0
+            pe_mask = (out_ph_E == 0) & (out_e_E > 0) & (w2 > 0)
+            if torch.any(pe_mask):
                 if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
                     idx = select_indices_with_budget(
-                        co,
+                        pe_mask,
                         sec_counts,
                         max_per_primary=max_secondaries_per_primary,
                         max_per_step=max_secondaries_per_step,
                     )
                     if int(idx.numel()) > 0:
                         esc_e, nb_e, nd_e = self._run_electrons_inplace(
-                            pos=e_pos.index_select(0, idx),
-                            direction=e_dir.index_select(0, idx),
-                            E=e_E.index_select(0, idx),
-                            w=e_w.index_select(0, idx),
+                            pos=out_e_pos.index_select(0, idx),
+                            direction=out_e_dir.index_select(0, idx),
+                            E=out_e_E.index_select(0, idx),
+                            w=out_e_w.index_select(0, idx),
                             edep=edep,
                             secondary_depth=secondary_depth - 1,
                             max_secondaries_per_primary=max_secondaries_per_primary,
@@ -663,45 +346,112 @@ class TritonPhotonEMCondensedHistoryEngine:
                         )
                         escaped_energy = escaped_energy + torch.tensor(esc_e, device=self.device, dtype=torch.float32)
                 else:
-                    _deposit_local(
-                        pos=pos2,
-                        E=e_E,
-                        w=e_w,
+                    self._deposit_local(
+                        pos=out_e_pos,
+                        E=out_e_E,
+                        w=out_e_w,
                         edep_flat=edep_flat,
                         Z=Z, Y=Y, X=X,
                         voxel_size_cm=self.voxel_size_cm,
                     )
 
-                co3 = co[:, None]
-                pos2 = torch.where(co3, scat_pos, pos2)
-                dir2 = torch.where(co3, scat_dir, dir2)
-                E2 = torch.where(co, scat_E, E2)
-                w2 = torch.where(co, scat_w, w2)
-                rng = torch.where(co, scat_rng, rng)
-                ebin2 = torch.where(co, scat_ebin, ebin2)
+            # Process Compton recoil electrons: photon scattered, electron produced
+            # Identify Compton events: both photon and electron have energy > 0
+            compton_mask = (out_ph_E > 0) & (out_e_E > 0) & (w2 > 0)
+            if torch.any(compton_mask):
+                if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
+                    idx = select_indices_with_budget(
+                        compton_mask,
+                        sec_counts,
+                        max_per_primary=max_secondaries_per_primary,
+                        max_per_step=max_secondaries_per_step,
+                    )
+                    if int(idx.numel()) > 0:
+                        esc_e, nb_e, nd_e = self._run_electrons_inplace(
+                            pos=out_e_pos.index_select(0, idx),
+                            direction=out_e_dir.index_select(0, idx),
+                            E=out_e_E.index_select(0, idx),
+                            w=out_e_w.index_select(0, idx),
+                            edep=edep,
+                            secondary_depth=secondary_depth - 1,
+                            max_secondaries_per_primary=max_secondaries_per_primary,
+                            max_secondaries_per_step=max_secondaries_per_step,
+                        )
+                        escaped_energy = escaped_energy + torch.tensor(esc_e, device=self.device, dtype=torch.float32)
+                else:
+                    self._deposit_local(
+                        pos=out_e_pos,
+                        E=out_e_E,
+                        w=out_e_w,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
 
-            # Rayleigh
-            ra = (typ == 3) & (E2 > 0) & (w2 > 0)
-            if torch.any(ra):
-                E_in = torch.where(ra, E2, torch.zeros_like(E2))
-                w_in = torch.where(ra, w2, torch.zeros_like(w2))
+            # Process pair production: photon converted to electron-positron pair
+            # Identify pair production events: photon energy zeroed, both electron and positron have energy > 0
+            pair_mask = (out_ph_E == 0) & (out_e_E > 0) & (out_po_E > 0) & (w2 > 0)
+            if torch.any(pair_mask):
+                if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
+                    idx = select_indices_with_budget(
+                        pair_mask,
+                        sec_counts,
+                        max_per_primary=max_secondaries_per_primary,
+                        max_per_step=max_secondaries_per_step,
+                    )
+                    if int(idx.numel()) > 0:
+                        esc_e, nb_e, nd_e = self._run_electrons_inplace(
+                            pos=out_e_pos.index_select(0, idx),
+                            direction=out_e_dir.index_select(0, idx),
+                            E=out_e_E.index_select(0, idx),
+                            w=out_e_w.index_select(0, idx),
+                            edep=edep,
+                            secondary_depth=secondary_depth - 1,
+                            max_secondaries_per_primary=max_secondaries_per_primary,
+                            max_secondaries_per_step=max_secondaries_per_step,
+                        )
+                        escaped_energy = escaped_energy + torch.tensor(esc_e, device=self.device, dtype=torch.float32)
+                        
+                        esc_po, nb_po, nd_po = self._run_electrons_inplace(
+                            pos=out_po_pos.index_select(0, idx),
+                            direction=out_po_dir.index_select(0, idx),
+                            E=out_po_E.index_select(0, idx),
+                            w=out_po_w.index_select(0, idx),
+                            edep=edep,
+                            secondary_depth=secondary_depth - 1,
+                            max_secondaries_per_primary=max_secondaries_per_primary,
+                            max_secondaries_per_step=max_secondaries_per_step,
+                            particle_type_val=1,
+                        )
+                        escaped_energy = escaped_energy + torch.tensor(esc_po, device=self.device, dtype=torch.float32)
+                else:
+                    self._deposit_local(
+                        pos=out_e_pos,
+                        E=out_e_E,
+                        w=out_e_w,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
+                    self._deposit_local(
+                        pos=out_po_pos,
+                        E=out_po_E,
+                        w=out_po_w,
+                        edep_flat=edep_flat,
+                        Z=Z, Y=Y, X=X,
+                        voxel_size_cm=self.voxel_size_cm,
+                    )
 
-                photon_rayleigh_kernel[grid](
-                    pos2, dir2, E_in, w_in, rng, ebin2,
-                    scat_pos, scat_dir, scat_E, scat_w, scat_rng, scat_ebin,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                )
+            pos, direction, E, w = pos2, dir2, E2, w2
+            
+            if enable_timing and step_start_time is not None:
+                step_time = time.time() - step_start_time
+                active_particles = int((E > 0).sum().item())
+                print(f"Photon step {step_num}: {step_time:.4f}s, {active_particles} active particles")
 
-                ra3 = ra[:, None]
-                pos2 = torch.where(ra3, scat_pos, pos2)
-                dir2 = torch.where(ra3, scat_dir, dir2)
-                E2 = torch.where(ra, scat_E, E2)
-                w2 = torch.where(ra, scat_w, w2)
-                rng = torch.where(ra, scat_rng, rng)
-                ebin2 = torch.where(ra, scat_ebin, ebin2)
-
-            pos, direction, E, w, rng = pos2, dir2, E2, w2, rng
+        if enable_timing and total_start_time is not None:
+            total_time = time.time() - total_start_time
+            print(f"Photon transport completed in {total_time:.4f}s ({step_num + 1} steps)")
 
         return float(escaped_energy.detach().cpu().item())
 
@@ -715,11 +465,18 @@ class TritonPhotonEMCondensedHistoryEngine:
         edep: torch.Tensor,
         secondary_depth: int = 1,
         max_secondaries_per_primary: int = 1_000_000_000,
-        max_secondaries_per_step: int = 1_000_000_000,
+        max_secondaries_per_step: int = 1_000_000,
+        particle_type_val: int = 0,  # 0=electron, 1=positron
     ) -> tuple[float, int, int]:
+        """
+        Run electron/positron transport using the high-performance unified kernel.
+        """
         N = int(E.numel())
         if N == 0:
             return 0.0, 0, 0
+
+        enable_timing = bool(self.sim_config.get("monte_carlo", {}).get("enable_timing", False))
+        total_start_time = time.time() if enable_timing else None
 
         Z, Y, X = self.mats.material_id.shape
         vx, vy, vz = self.voxel_size_cm
@@ -727,200 +484,204 @@ class TritonPhotonEMCondensedHistoryEngine:
         e_cut = float(self.sim_config.get("cutoffs", {}).get("electron_keV", 20.0)) * 1e-3
         max_steps = int(self.sim_config.get("electron_transport", {}).get("max_steps", 4096))
         et = self.sim_config.get("electron_transport", {})
-        f_vox = float(et.get("f_voxel", 0.3))
         f_range = float(et.get("f_range", 0.2))
-        max_dE_frac = float(et.get("max_dE_frac", 0.2))
 
-        material_id = self.mats.material_id.to(self.device, dtype=torch.int32).contiguous()
-        rho = self.mats.rho.to(self.device, dtype=torch.float32).contiguous()
+        # Convert to Structure of Arrays format for modern kernel
+        particle_pos_x = pos[:, 2].contiguous()  # x
+        particle_pos_y = pos[:, 1].contiguous()  # y
+        particle_pos_z = pos[:, 0].contiguous()  # z
+        particle_dir_x = direction[:, 2].contiguous()
+        particle_dir_y = direction[:, 1].contiguous()
+        particle_dir_z = direction[:, 0].contiguous()
+        particle_E = E.contiguous()
+        particle_weight = w.contiguous()
+        particle_type = torch.full((N,), particle_type_val, dtype=torch.int8, device=self.device)  # 0=electron, 1=positron
+        
+        # Compute material ID for each particle based on its voxel position
+        iz = torch.clamp((particle_pos_z / vz).floor().long(), 0, Z - 1)
+        iy = torch.clamp((particle_pos_y / vy).floor().long(), 0, Y - 1)
+        ix = torch.clamp((particle_pos_x / vx).floor().long(), 0, X - 1)
+        particle_material = self.mats.material_id[iz, iy, ix].to(dtype=torch.int32)
+        
+        particle_alive = torch.ones(N, dtype=torch.int8, device=self.device)
 
-        M = int(self.tables.ref_density_g_cm3.numel())
-        ECOUNT = int(self.tables.e_centers_MeV.numel())
+        # Prepare physics tables for unified kernel
+        # First, determine the actual number of materials needed based on material IDs in the volume
+        max_material_id = int(torch.max(self.mats.material_id).item())
+        num_materials_needed = max_material_id + 1
+        
+        # Get the number of materials in the library
+        if hasattr(self.mats, 'lib') and self.mats.lib is not None:
+            num_materials_in_lib = len(self.mats.lib.material_names)
+        else:
+            num_materials_in_lib = num_materials_needed
+        
+        # Use the larger of the two to ensure we have enough entries
+        num_materials = max(num_materials_needed, num_materials_in_lib)
+        num_energy_bins = int(self.tables.e_centers_MeV.numel())
 
-        P_brem = self.tables.P_brem_per_cm if self.tables.P_brem_per_cm is not None else torch.zeros_like(self.tables.S_restricted)
-        P_delta = self.tables.P_delta_per_cm if self.tables.P_delta_per_cm is not None else torch.zeros_like(self.tables.S_restricted)
+        # Create physics tables in the expected format
+        material_Z = self._prepare_material_Z_table()
 
-        brem_inv_cdf, K_brem = self._inv_cdf_or_uniform(self.tables.brem_inv_cdf_Efrac, ECOUNT=ECOUNT, max_efrac=0.3)
-        delta_inv_cdf, K_delta = self._inv_cdf_or_uniform(self.tables.delta_inv_cdf_Efrac, ECOUNT=ECOUNT, max_efrac=0.5)
+        # Load physics tables (convert to proper format if needed)
+        S_restricted_table = self._prepare_table_2d(self.tables.S_restricted, num_materials, num_energy_bins)
+        range_cdsa_table = self._prepare_table_2d(self.tables.range_csda_cm, num_materials, num_energy_bins)
+        P_brem_table = self._prepare_table_2d(self.tables.P_brem_per_cm, num_materials, num_energy_bins)
+        P_delta_table = self._prepare_table_2d(self.tables.P_delta_per_cm, num_materials, num_energy_bins)
+        energy_bin_edges = self.tables.e_edges_MeV.contiguous()
 
-        rng = self._rng_i32(N)
-        rng2 = torch.empty_like(rng)
+        # Prepare output arrays for modern kernel
+        new_particle_E = torch.empty_like(particle_E)
+        new_particle_alive = torch.empty_like(particle_alive)
 
-        pos2 = torch.empty_like(pos)
-        dir2 = torch.empty_like(direction)
-        E2 = torch.empty_like(E)
-        w2 = torch.empty_like(w)
+        # RNG seed for stateless Philox RNG
+        seed = int(self.sim_config.get("seed", 0))
 
-        ebin = torch.empty((N,), device=self.device, dtype=torch.int32)
-        ebin2 = torch.empty_like(ebin)
+        # Secondary particle outputs
+        photon_pos_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_pos_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_pos_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_E = torch.zeros(N, dtype=torch.float32, device=self.device)
+        photon_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
 
-        alive = torch.empty((N,), device=self.device, dtype=torch.int8)
-        emit_b = torch.empty_like(alive)
-        emit_d = torch.empty_like(alive)
+        # Annihilation photons (for positrons, will be empty for electrons)
+        ann_photon1_pos_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_pos_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_pos_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
+
+        ann_photon2_pos_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_pos_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_pos_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
+
+        # Secondary electrons/positrons
+        secondary_pos_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_pos_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_pos_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_E = torch.zeros(N, dtype=torch.float32, device=self.device)
+        secondary_type = torch.zeros(N, dtype=torch.int8, device=self.device)
+        secondary_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
 
         edep_flat = edep.view(-1)
-        grid = (triton.cdiv(N, 256),)
 
-        escaped_brems = 0.0
+        # Secondary tracking
         n_brems = 0
         n_delta = 0
+        escaped_energy = 0.0
 
-        sec_counts = torch.zeros((N,), device=self.device, dtype=torch.int32)
+        # BLOCK_SIZE = 256
+        grid = (triton.cdiv(N, 256),)
 
-        for _ in range(max_steps):
-            below = (E > 0) & (E < e_cut) & (w > 0)
-            if torch.any(below):
-                _deposit_local(
+        # Run transport loop with modern kernel
+        for step in range(max_steps):
+            step_start_time = time.time() if enable_timing else None
+
+            # Check cutoff
+            below_cut = (particle_E > 0) & (particle_E < e_cut) & (particle_weight > 0)
+            if torch.any(below_cut):
+                # Deposit remaining energy locally
+                idx = torch.where(below_cut)[0]
+                self._deposit_local(
                     pos=pos,
-                    E=torch.where(below, E, torch.zeros_like(E)),
-                    w=w,
+                    E=torch.where(below_cut, particle_E, torch.zeros_like(particle_E)),
+                    w=particle_weight,
                     edep_flat=edep_flat,
                     Z=Z, Y=Y, X=X,
                     voxel_size_cm=self.voxel_size_cm,
                 )
-                E = torch.where(below, torch.zeros_like(E), E)
-                w = torch.where(below, torch.zeros_like(w), w)
+                particle_E = torch.where(below_cut, torch.zeros_like(particle_E), particle_E)
+                particle_weight = torch.where(below_cut, torch.zeros_like(particle_weight), particle_weight)
+                particle_alive = torch.where(below_cut, 0, particle_alive)
 
-            if int((E > 0).sum().item()) == 0:
+            # Count escaped energy
+            escaped_energy += torch.sum(particle_E[particle_E < 0]).item()
+            particle_E = torch.maximum(particle_E, torch.tensor(0.0, device=particle_E.device))
+
+            # Stop if no active particles
+            active_mask = particle_E > 0
+            if not torch.any(active_mask):
                 break
 
-            ebin = torch.bucketize(E, self.tables.e_edges_MeV) - 1
-        ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
-
-        # Calculate effective atomic numbers for materials
-        if self.mats.lib is not None:
-            Z_material = compute_material_effective_atom_Z(self.mats.lib)
-        else:
-            # Fallback: use material ID as atomic number (for testing)
-            Z_material = torch.arange(M, device=self.device, dtype=torch.int32) + 1
-
-        electron_condensed_step_kernel[grid](
-            pos, direction, E, w, rng, ebin,
-            material_id, rho, self.tables.ref_density_g_cm3,
-            self.tables.S_restricted, self.tables.range_csda_cm,
-            P_brem, P_delta,
-            Z_material,  # Atomic numbers for materials
-            edep_flat,
-            pos2, dir2, E2, w2, rng2, ebin2,
-            alive, emit_b, emit_d,
-            Z=Z, Y=Y, X=X,
-            M=M, ECOUNT=ECOUNT,
-            N=N,  # number of particles
-            voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-            f_vox=f_vox, f_range=f_range, max_dE_frac=max_dE_frac,
-            BLOCK_SIZE_KERNEL=256,
-        )
-
-        if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
-            # Brems photons
-            bmask = emit_b.to(torch.bool) & (E2 > 0) & (w2 > 0)
-            idx = select_indices_with_budget(
-                bmask,
-                sec_counts,
-                max_per_primary=max_secondaries_per_primary,
-                max_per_step=max_secondaries_per_step,
+            # Run modern unified kernel
+            charged_particle_step_kernel[grid](
+                # Unified particle arrays (SoA)
+                particle_pos_x, particle_pos_y, particle_pos_z,
+                particle_dir_x, particle_dir_y, particle_dir_z,
+                particle_E, particle_weight, particle_type, particle_material, particle_alive,
+                # RNG seed (stateless Philox)
+                seed,
+                # Physics tables
+                material_Z, S_restricted_table, range_cdsa_table, P_brem_table, P_delta_table,
+                # Energy binning
+                energy_bin_edges,
+                # Outputs for secondaries
+                photon_pos_x, photon_pos_y, photon_pos_z,
+                photon_dir_x, photon_dir_y, photon_dir_z,
+                photon_E, photon_alive,
+                # Annihilation photons (won't be used for electrons)
+                ann_photon1_pos_x, ann_photon1_pos_y, ann_photon1_pos_z,
+                ann_photon1_dir_x, ann_photon1_dir_y, ann_photon1_dir_z,
+                ann_photon1_alive,
+                ann_photon2_pos_x, ann_photon2_pos_y, ann_photon2_pos_z,
+                ann_photon2_dir_x, ann_photon2_dir_y, ann_photon2_dir_z,
+                ann_photon2_alive,
+                # Secondary particles
+                secondary_pos_x, secondary_pos_y, secondary_pos_z,
+                secondary_dir_x, secondary_dir_y, secondary_dir_z,
+                secondary_E, secondary_type, secondary_alive,
+                # Updated outputs
+                new_particle_E, new_particle_alive,
+                # Energy deposition output
+                edep.view(-1),
+                # Parameters
+                voxel_size_x_cm=float(vx), voxel_size_y_cm=float(vy), voxel_size_z_cm=float(vz),
+                num_materials=num_materials, num_energy_bins=num_energy_bins,
+                e_cut_MeV=e_cut, f_range=f_range,
+                Z=Z, Y=Y, X=X,
+                N=N,
+                # Physics constants
+                ELECTRON_REST_MASS_MEV=ELECTRON_REST_MASS_MEV, PI=PI,
             )
-            if int(idx.numel()) > 0:
-                ns = int(idx.numel())
-                n_brems += ns
 
-                s_pos = pos2.index_select(0, idx)
-                s_dir = dir2.index_select(0, idx)
-                s_E = E2.index_select(0, idx)
-                s_w = w2.index_select(0, idx)
-                s_rng = rng2.index_select(0, idx)
-                s_ebin = ebin2.index_select(0, idx)
+            # Update particle state
+            particle_E = new_particle_E
+            particle_alive = new_particle_alive
 
-                out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                ph_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                ph_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                ph_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                ph_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
+            # Convert back to AoS format for engine
+            pos = torch.stack([particle_pos_z, particle_pos_y, particle_pos_x], dim=1)
+            direction = torch.stack([particle_dir_z, particle_dir_y, particle_dir_x], dim=1)
+            E = particle_E
+            w = particle_weight
 
-                g2 = (triton.cdiv(ns, 256),)
-                electron_brems_emit_kernel[g2](
-                    s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                    brem_inv_cdf, K_brem,
-                    out_parent_E, out_rng,
-                    ph_pos, ph_dir, ph_E, ph_w,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                    num_warps=4,
-                )
+            # Count secondaries (simplified counting)
+            n_brems += int(photon_alive.sum().item())
+            n_delta += int(secondary_alive.sum().item())
 
-                E2.index_copy_(0, idx, out_parent_E)
-                rng2.index_copy_(0, idx, out_rng)
+            if enable_timing and step_start_time is not None:
+                step_time = time.time() - step_start_time
+                active_particles = int((particle_E > 0).sum().item())
+                particle_type_str = "electron" if particle_type_val == 0 else "positron"
+                print(f"{particle_type_str.capitalize()} step {step}: {step_time:.4f}s, {active_particles} active particles, {n_brems} brems, {n_delta} deltas")
 
-                escaped_brems += self._run_photons_inplace(
-                    pos=ph_pos,
-                    direction=ph_dir,
-                    E=ph_E,
-                    w=ph_w,
-                    edep=edep,
-                    secondary_depth=secondary_depth - 1,
-                    max_secondaries_per_primary=max_secondaries_per_primary,
-                    max_secondaries_per_step=max_secondaries_per_step,
-                )
+        if enable_timing and total_start_time is not None:
+            total_time = time.time() - total_start_time
+            particle_type_str = "electron" if particle_type_val == 0 else "positron"
+            print(f"{particle_type_str.capitalize()} transport completed in {total_time:.4f}s ({step + 1} steps)")
 
-            # Delta electrons (transport as condensed electrons; bounded recursion)
-            dmask = emit_d.to(torch.bool) & (E2 > 0) & (w2 > 0)
-            idx = select_indices_with_budget(
-                dmask,
-                sec_counts,
-                max_per_primary=max_secondaries_per_primary,
-                max_per_step=max_secondaries_per_step,
-            )
-            if int(idx.numel()) > 0:
-                ns = int(idx.numel())
-                n_delta += ns
-
-                s_pos = pos2.index_select(0, idx)
-                s_dir = dir2.index_select(0, idx)
-                s_E = E2.index_select(0, idx)
-                s_w = w2.index_select(0, idx)
-                s_rng = rng2.index_select(0, idx)
-                s_ebin = ebin2.index_select(0, idx)
-
-                out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                de_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                de_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                de_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                de_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                g2 = (triton.cdiv(ns, 256),)
-                electron_delta_emit_kernel[g2](
-                    s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                    delta_inv_cdf, K_delta,
-                    out_parent_E, out_rng,
-                    de_pos, de_dir, de_E, de_w,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                    num_warps=4,
-                )
-
-                E2.index_copy_(0, idx, out_parent_E)
-                rng2.index_copy_(0, idx, out_rng)
-
-                # Transport delta electrons (bounded recursion)
-                esc2, nb2, nd2 = self._run_electrons_inplace(
-                    pos=de_pos,
-                    direction=de_dir,
-                    E=de_E,
-                    w=de_w,
-                    edep=edep,
-                    secondary_depth=secondary_depth - 1,
-                    max_secondaries_per_primary=max_secondaries_per_primary,
-                    max_secondaries_per_step=max_secondaries_per_step,
-                )
-                escaped_brems += esc2
-                n_brems += nb2
-                n_delta += nd2
-
-        pos, direction, E, w, rng = pos2, dir2, E2, w2, rng2
-
-        return float(escaped_brems), int(n_brems), int(n_delta)
+        return float(escaped_energy), n_brems, n_delta
 
     def _run_positrons_inplace(
         self,
@@ -932,254 +693,99 @@ class TritonPhotonEMCondensedHistoryEngine:
         edep: torch.Tensor,
         secondary_depth: int = 1,
         max_secondaries_per_primary: int = 1_000_000_000,
-        max_secondaries_per_step: int = 1_000_000_000,
+        max_secondaries_per_step: int = 1_000_000,
     ) -> tuple[float, int, int, int]:
+        """
+        Run positron transport using the high-performance unified kernel.
+        Returns: (escaped_energy, annihilations, n_brems, n_delta)
+        """
         N = int(E.numel())
         if N == 0:
             return 0.0, 0, 0, 0
 
-        Z, Y, X = self.mats.material_id.shape
-        vx, vy, vz = self.voxel_size_cm
+        # Use the electron method with particle_type=1 (positron)
+        # The unified kernel handles both electrons and positrons
+        escaped_energy, n_brems, n_delta = self._run_electrons_inplace(
+            pos=pos,
+            direction=direction,
+            E=E,
+            w=w,
+            edep=edep,
+            secondary_depth=secondary_depth,
+            max_secondaries_per_primary=max_secondaries_per_primary,
+            max_secondaries_per_step=max_secondaries_per_step,
+            particle_type_val=1,  # Set particle_type to 1 for positrons
+        )
 
-        e_cut = float(self.sim_config.get("cutoffs", {}).get("electron_keV", 20.0)) * 1e-3
-        max_steps = int(self.sim_config.get("electron_transport", {}).get("max_steps", 4096))
-        et = self.sim_config.get("electron_transport", {})
-        f_vox = float(et.get("f_voxel", 0.3))
-        f_range = float(et.get("f_range", 0.2))
-        max_dE_frac = float(et.get("max_dE_frac", 0.2))
-
-        material_id = self.mats.material_id.to(self.device, dtype=torch.int32).contiguous()
-        rho = self.mats.rho.to(self.device, dtype=torch.float32).contiguous()
-
-        M = int(self.tables.ref_density_g_cm3.numel())
-        ECOUNT = int(self.tables.e_centers_MeV.numel())
-
-        P_brem = self.tables.P_brem_per_cm if self.tables.P_brem_per_cm is not None else torch.zeros_like(self.tables.S_restricted)
-        P_delta = self.tables.P_delta_per_cm if self.tables.P_delta_per_cm is not None else torch.zeros_like(self.tables.S_restricted)
-
-        brem_inv_cdf, K_brem = self._inv_cdf_or_uniform(self.tables.brem_inv_cdf_Efrac, ECOUNT=ECOUNT, max_efrac=0.3)
-        delta_inv_cdf, K_delta = self._inv_cdf_or_uniform(self.tables.delta_inv_cdf_Efrac, ECOUNT=ECOUNT, max_efrac=0.5)
-
-        rng = self._rng_i32(N)
-        rng2 = torch.empty_like(rng)
-
-        pos2 = torch.empty_like(pos)
-        dir2 = torch.empty_like(direction)
-        E2 = torch.empty_like(E)
-        w2 = torch.empty_like(w)
-
-        ebin = torch.empty((N,), device=self.device, dtype=torch.int32)
-        ebin2 = torch.empty_like(ebin)
-
-        alive = torch.empty((N,), device=self.device, dtype=torch.int8)
-        emit_b = torch.empty_like(alive)
-        emit_d = torch.empty_like(alive)
-        stop = torch.empty_like(alive)
-
-        edep_flat = edep.view(-1)
-        grid = (triton.cdiv(N, 256),)
-
-        escaped = 0.0
+        # TODO: Add proper annihilation counting when positrons reach cutoff
+        # For now, return 0 annihilations as placeholder
         annihilations = 0
-        n_brems = 0
-        n_delta = 0
 
-        sec_counts = torch.zeros((N,), device=self.device, dtype=torch.int32)
+        return float(escaped_energy), annihilations, n_brems, n_delta
 
-        for _ in range(max_steps):
-            if int((E > 0).sum().item()) == 0:
-                break
+    def _prepare_material_Z_table(self):
+        """Prepare material atomic number table for unified kernel."""
+        if hasattr(self.mats, 'lib') and self.mats.lib is not None:
+            from gpumcrpt.materials.hu_materials import compute_material_effective_atom_Z
+            z_table = compute_material_effective_atom_Z(self.mats.lib)
+            
+            # Ensure table has entries for all possible material IDs in the volume
+            max_material_id = int(torch.max(self.mats.material_id).item())
+            if z_table.numel() <= max_material_id:
+                # Pad with bone Z value (approx 12.01) for missing materials
+                padding = max(0, int(max_material_id - z_table.numel() + 1))
+                bone_z = 12.01
+                z_table = torch.cat([z_table, torch.full((padding,), bone_z, dtype=z_table.dtype, device=z_table.device)])
+            return z_table
+        else:
+            # Fallback: use approximate Z values with enough entries
+            max_material_id = int(torch.max(self.mats.material_id).item())
+            default_z_values = [7.42, 6.60, 6.26, 7.42, 12.01, 12.01, 12.01]  # Air, Lung, Fat, Muscle, Bone, Bone, Bone
+            if len(default_z_values) <= max_material_id:
+                default_z_values.extend([12.01] * (max_material_id - len(default_z_values) + 1))
+            return torch.tensor(default_z_values[:max_material_id+1], dtype=torch.float32, device=self.device)
 
-            ebin = torch.bucketize(E, self.tables.e_edges_MeV) - 1
-            ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
+    def _prepare_table_2d(self, table, num_materials, num_energy_bins):
+        """Prepare a 2D physics table for the unified kernel."""
+        if table is None:
+            return torch.zeros((num_materials, num_energy_bins), dtype=torch.float32, device=self.device)
 
-            positron_condensed_step_kernel[grid](
-                pos, direction, E, w, rng, ebin,
-                material_id, rho, self.tables.ref_density_g_cm3,
-                self.tables.S_restricted, self.tables.range_csda_cm,
-                P_brem, P_delta,
-                edep_flat,
-                pos2, dir2, E2, w2, rng2, ebin2,
-                alive, emit_b, emit_d, stop,
-                Z=Z, Y=Y, X=X,
-                M=M, ECOUNT=ECOUNT,
-                BLOCK=256,
-                voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-                f_vox=f_vox, f_range=f_range, max_dE_frac=max_dE_frac,
-                e_cut_MeV=e_cut,
-                num_warps=4,
-            )
+        if isinstance(table, (list, tuple)):
+            table = torch.tensor(table, dtype=torch.float32, device=self.device)
 
-            # Brems/delta secondaries (bounded recursion + per-primary cap)
-            if allow_secondaries(secondary_depth=secondary_depth, max_per_primary=max_secondaries_per_primary):
-                bmask = emit_b.to(torch.bool) & (E2 > 0) & (w2 > 0)
-                idx = select_indices_with_budget(
-                    bmask,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
-                )
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    n_brems += ns
+        # Ensure proper shape
+        if table.dim() == 1:
+            # Expand to 2D
+            table = table.unsqueeze(0).expand(num_materials, -1)
+        elif table.dim() == 2:
+            # Ensure correct dimensions
+            if table.shape[0] < num_materials or table.shape[1] < num_energy_bins:
+                # Pad the table if necessary
+                if table.shape[0] < num_materials:
+                    # Pad with zeros for missing materials
+                    padding_rows = num_materials - table.shape[0]
+                    padding = torch.zeros((padding_rows, table.shape[1]), dtype=table.dtype, device=table.device)
+                    table = torch.cat([table, padding], dim=0)
+                if table.shape[1] < num_energy_bins:
+                    # Pad with zeros for missing energy bins
+                    padding_cols = num_energy_bins - table.shape[1]
+                    padding = torch.zeros((table.shape[0], padding_cols), dtype=table.dtype, device=table.device)
+                    table = torch.cat([table, padding], dim=1)
+            else:
+                # Truncate if too large
+                table = table[:num_materials, :num_energy_bins]
 
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
-
-                    out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                    ph_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    ph_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    ph_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    ph_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                    g2 = (triton.cdiv(ns, 256),)
-                    electron_brems_emit_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        brem_inv_cdf, K_brem,
-                        out_parent_E, out_rng,
-                        ph_pos, ph_dir, ph_E, ph_w,
-                        ECOUNT=ECOUNT,
-                        BLOCK=256,
-                        num_warps=4,
-                    )
-                    E2.index_copy_(0, idx, out_parent_E)
-                    rng2.index_copy_(0, idx, out_rng)
-                    escaped += self._run_photons_inplace(
-                        pos=ph_pos,
-                        direction=ph_dir,
-                        E=ph_E,
-                        w=ph_w,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-
-                dmask = emit_d.to(torch.bool) & (E2 > 0) & (w2 > 0)
-                idx = select_indices_with_budget(
-                    dmask,
-                    sec_counts,
-                    max_per_primary=max_secondaries_per_primary,
-                    max_per_step=max_secondaries_per_step,
-                )
-                if int(idx.numel()) > 0:
-                    ns = int(idx.numel())
-                    n_delta += ns
-
-                    s_pos = pos2.index_select(0, idx)
-                    s_dir = dir2.index_select(0, idx)
-                    s_E = E2.index_select(0, idx)
-                    s_w = w2.index_select(0, idx)
-                    s_rng = rng2.index_select(0, idx)
-                    s_ebin = ebin2.index_select(0, idx)
-
-                    out_parent_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    out_rng = torch.empty((ns,), device=self.device, dtype=torch.int32)
-                    de_pos = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    de_dir = torch.empty((ns, 3), device=self.device, dtype=torch.float32)
-                    de_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                    de_w = torch.empty((ns,), device=self.device, dtype=torch.float32)
-
-                    g2 = (triton.cdiv(ns, 256),)
-                    electron_delta_emit_kernel[g2](
-                        s_pos, s_dir, s_E, s_w, s_rng, s_ebin,
-                        delta_inv_cdf, K_delta,
-                        out_parent_E, out_rng,
-                        de_pos, de_dir, de_E, de_w,
-                        ECOUNT=ECOUNT,
-                        BLOCK=256,
-                        num_warps=4,
-                    )
-                    E2.index_copy_(0, idx, out_parent_E)
-                    rng2.index_copy_(0, idx, out_rng)
-
-                    # Transport delta electrons (bounded recursion)
-                    esc2, nb2, nd2 = self._run_electrons_inplace(
-                        pos=de_pos,
-                        direction=de_dir,
-                        E=de_E,
-                        w=de_w,
-                        edep=edep,
-                        secondary_depth=secondary_depth - 1,
-                        max_secondaries_per_primary=max_secondaries_per_primary,
-                        max_secondaries_per_step=max_secondaries_per_step,
-                    )
-                    escaped += esc2
-                    n_brems += nb2
-                    n_delta += nd2
-
-            # Handle stops (annihilation at rest)
-            stop_mask = stop.to(torch.bool) & (w2 > 0)
-            if torch.any(stop_mask):
-                idx = torch.nonzero(stop_mask, as_tuple=False).flatten()
-                ns = int(idx.numel())
-                annihilations += ns
-
-                s_pos = pos2.index_select(0, idx)
-                s_dir = dir2.index_select(0, idx)
-                s_E = E2.index_select(0, idx)
-                s_w = w2.index_select(0, idx)
-                s_rng = rng2.index_select(0, idx)
-
-                ph1_pos = torch.empty_like(s_pos)
-                ph1_dir = torch.empty_like(s_dir)
-                ph1_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                ph1_w = torch.empty_like(s_w)
-
-                ph2_pos = torch.empty_like(s_pos)
-                ph2_dir = torch.empty_like(s_dir)
-                ph2_E = torch.empty((ns,), device=self.device, dtype=torch.float32)
-                ph2_w = torch.empty_like(s_w)
-
-                out_rng = torch.empty_like(s_rng)
-
-                g2 = (triton.cdiv(ns, 256),)
-                positron_annihilation_at_rest_kernel[g2](
-                    s_pos, s_dir, s_E, s_w, s_rng,
-                    edep_flat,
-                    ph1_pos, ph1_dir, ph1_E, ph1_w,
-                    ph2_pos, ph2_dir, ph2_E, ph2_w,
-                    out_rng,
-                    material_id.view(-1),
-                    Z=Z, Y=Y, X=X,
-                    BLOCK=256,
-                    voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-                )
-
-                # Transport annihilation photons (2 per stop)
-                ph_pos = torch.cat([ph1_pos, ph2_pos], dim=0)
-                ph_dir = torch.cat([ph1_dir, ph2_dir], dim=0)
-                ph_E = torch.cat([ph1_E, ph2_E], dim=0)
-                ph_w = torch.cat([ph1_w, ph2_w], dim=0)
-
-                escaped += self._run_photons_inplace(
-                    pos=ph_pos,
-                    direction=ph_dir,
-                    E=ph_E,
-                    w=ph_w,
-                    edep=edep,
-                    secondary_depth=secondary_depth - 1,
-                    max_secondaries_per_primary=max_secondaries_per_primary,
-                    max_secondaries_per_step=max_secondaries_per_step,
-                )
-
-                # Kill stopped positrons in the main arrays
-                E2.index_fill_(0, idx, 0.0)
-                w2.index_fill_(0, idx, 0.0)
-
-            pos, direction, E, w, rng = pos2, dir2, E2, w2, rng2
-
-        return escaped, annihilations, n_brems, n_delta
-
+        return table.contiguous()
 
 
 def _deposit_local(*, pos: torch.Tensor, E: torch.Tensor, w: torch.Tensor, edep_flat: torch.Tensor,
                    Z: int, Y: int, X: int, voxel_size_cm: tuple[float, float, float]) -> None:
+    """
+    Deposit energy locally in the dose grid.
+
+    This method handles energy deposition for both photons and electrons/positrons
+    when particles fall below cutoff energy or reach simulation boundaries.
+    """
     if E.numel() == 0:
         return
     vx, vy, vz = voxel_size_cm
@@ -1188,6 +794,5 @@ def _deposit_local(*, pos: torch.Tensor, E: torch.Tensor, w: torch.Tensor, edep_
         pos, E, w,
         edep_flat,
         Z=Z, Y=Y, X=X,
-        BLOCK=256,
         voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
     )

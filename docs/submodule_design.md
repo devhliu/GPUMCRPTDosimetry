@@ -306,3 +306,25 @@ The system uses Triton for GPU acceleration with specialized kernels:
 - Additional decay databases
 - Improved optimization and performance
 - Extended validation and testing
+
+
+
+  Recommendation: COMBINED electron/positron kernels
+
+  Rationale for Combination:
+
+  1. GPU Performance Benefits:
+    - Reduced kernel launches: Single kernel handles both particle types
+    - Better memory coalescing: Particles processed together improve cache locality
+    - Simplified wavefront: No need for separate electron/positron queues
+    - Lower register pressure: Shared code paths reduce GPU memory requirements
+  2. Physics Similarities (>95% identical):
+    - Multiple scattering (Molière theory): Identical
+    - Energy loss/straggling (Bethe-Bloch): Nearly identical, only differs by sign at very low energies
+    - Bremsstrahlung: Same cross-sections
+    - Delta ray production: Same mechanisms
+    - Cutoffs and stepping: Identical
+  3. Key Differences (easily handled):
+    - Annihilation: Only positrons, handled at end-of-life (E < cutoff)
+    - Minor cross-section differences: Handled by particle_type flag
+    - Sign flipping in magnetic fields: Not relevant in medical dosimetry

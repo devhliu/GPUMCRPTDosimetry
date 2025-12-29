@@ -5,11 +5,9 @@ from dataclasses import dataclass
 import torch
 import triton
 
-from gpumcrpt.transport.triton.photon_flight import photon_woodcock_flight_kernel
-from gpumcrpt.transport.triton.photon_interactions import photon_classify_kernel
-from gpumcrpt.transport.triton.compton import photon_compton_kernel
-from gpumcrpt.transport.triton.rayleigh import photon_rayleigh_kernel
-from gpumcrpt.transport.triton.edep_deposit import deposit_local_energy_kernel
+from gpumcrpt.transport.engine_base import BaseTransportEngine
+from gpumcrpt.transport.triton_kernels.photon.flight import photon_woodcock_flight_kernel_philox
+from gpumcrpt.transport.triton_kernels.photon.interactions import photon_interaction_kernel
 
 
 @dataclass
@@ -17,7 +15,7 @@ class PhotonOnlyStats:
     escaped_energy_MeV: float
 
 
-class PhotonOnlyTransportEngine:
+class PhotonOnlyTransportEngine(BaseTransportEngine):
     """PhotonOnly backend: photon-only transport (GPU/Triton).
 
     - Woodcock flight using tables.sigma_total + sigma_max
@@ -41,15 +39,15 @@ class PhotonOnlyTransportEngine:
         voxel_size_cm: tuple[float, float, float],
         device: str = "cuda",
     ) -> None:
-        if device != "cuda" or not torch.cuda.is_available():
-            raise RuntimeError("PhotonOnlyTransportEngine requires CUDA")
-
-        self.mats = mats
-        self.tables = tables
-        self.sim_config = sim_config
-        self.voxel_size_cm = voxel_size_cm
-        self.device = device
-
+        # Initialize base class
+        super().__init__(
+            mats=mats,
+            tables=tables,
+            sim_config=sim_config,
+            voxel_size_cm=voxel_size_cm,
+            device=device,
+        )
+        
         self._last_stats = PhotonOnlyStats(escaped_energy_MeV=0.0)
 
     @property
@@ -67,7 +65,7 @@ class PhotonOnlyTransportEngine:
         for q in (primaries.electrons, primaries.positrons):
             if q is None or q["E_MeV"].numel() == 0:
                 continue
-            _deposit_local(
+            self._deposit_local(
                 pos=q["pos_cm"].to(self.device, dtype=torch.float32),
                 E=q["E_MeV"].to(self.device, dtype=torch.float32),
                 w=q["w"].to(self.device, dtype=torch.float32),
@@ -87,38 +85,37 @@ class PhotonOnlyTransportEngine:
             self._last_stats = PhotonOnlyStats(escaped_energy_MeV=0.0)
             return edep
 
-        # RNG state for Triton kernels (xorshift32), int32
-        g = torch.Generator(device=self.device)
-        g.manual_seed(int(self.sim_config.get("seed", 0)))
-        rng = torch.randint(1, 2**31 - 1, (N,), generator=g, device=self.device, dtype=torch.int32)
+        # RNG seed for Triton kernels (Philox - stateless)
+        seed = int(self.sim_config.get("seed", 0))
 
         # Preallocate ping-pong buffers
         pos2 = torch.empty_like(pos)
         dir2 = torch.empty_like(direction)
         E2 = torch.empty_like(E)
         w2 = torch.empty_like(w)
-        rng2 = torch.empty_like(rng)
 
         ebin = torch.empty((N,), device=self.device, dtype=torch.int32)
         ebin2 = torch.empty_like(ebin)
 
         alive = torch.empty((N,), device=self.device, dtype=torch.int8)
         real = torch.empty_like(alive)
-        typ = torch.empty((N,), device=self.device, dtype=torch.int8)
 
         # Interaction outputs
-        scat_pos = torch.empty_like(pos)
-        scat_dir = torch.empty_like(direction)
-        scat_E = torch.empty_like(E)
-        scat_w = torch.empty_like(w)
-        scat_rng = torch.empty_like(rng)
-        scat_ebin = torch.empty_like(ebin)
-
-        # Dummy electron outputs for Compton kernel (we deposit locally using E_e and pos)
-        e_pos = torch.empty_like(pos)
-        e_dir = torch.empty_like(direction)
-        e_E = torch.empty_like(E)
-        e_w = torch.empty_like(w)
+        out_ph_pos = torch.empty_like(pos)
+        out_ph_dir = torch.empty_like(direction)
+        out_ph_E = torch.empty_like(E)
+        out_ph_w = torch.empty_like(w)
+        out_ph_ebin = torch.empty_like(ebin)
+        
+        out_e_pos = torch.empty_like(pos)
+        out_e_dir = torch.empty_like(direction)
+        out_e_E = torch.empty_like(E)
+        out_e_w = torch.empty_like(w)
+        
+        out_po_pos = torch.empty_like(pos)
+        out_po_dir = torch.empty_like(direction)
+        out_po_E = torch.empty_like(E)
+        out_po_w = torch.empty_like(w)
 
         escaped_energy = torch.tensor(0.0, device=self.device, dtype=torch.float32)
 
@@ -159,7 +156,7 @@ class PhotonOnlyTransportEngine:
             # Kill/Deposit below-cutoff photons
             below = (E > 0) & (E < photon_cut_MeV) & (w > 0)
             if torch.any(below):
-                _deposit_local(
+                self._deposit_local(
                     pos=pos,
                     E=torch.where(below, E, torch.zeros_like(E)),
                     w=w,
@@ -181,10 +178,11 @@ class PhotonOnlyTransportEngine:
 
             # Woodcock flight
             grid = (triton.cdiv(N, 256),)
-            photon_woodcock_flight_kernel[grid](
-                pos, direction, E, w, rng,
+            photon_woodcock_flight_kernel_philox[grid](
+                pos, direction, E, w,
+                seed,
                 ebin,
-                pos2, dir2, E2, w2, rng2,
+                pos2, dir2, E2, w2,
                 ebin2,
                 alive, real,
                 material_id_flat,
@@ -194,7 +192,7 @@ class PhotonOnlyTransportEngine:
                 self.tables.ref_density_g_cm3,
                 Z=Z, Y=Y, X=X,
                 M=M, ECOUNT=ECOUNT,
-                N=N,  # Add missing N parameter
+                N=N,
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
 
@@ -205,130 +203,40 @@ class PhotonOnlyTransportEngine:
                 E2 = torch.where(escaped_mask, torch.zeros_like(E2), E2)
                 w2 = torch.where(escaped_mask, torch.zeros_like(w2), w2)
 
-            # Classify only real interactions
-            photon_classify_kernel[grid](
+            # Use fused photon interaction kernel to combine classification and interaction
+            photon_interaction_kernel[grid](
                 real,
-                pos2,
-                E2,
-                ebin2,
-                rng2,
-                material_id_flat,
-                rho_flat,
-                self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo,
-                self.tables.sigma_compton,
-                self.tables.sigma_rayleigh,
+                pos2, dir2, E2, w2, ebin2,
+                material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
+                self.tables.sigma_photo, self.tables.sigma_compton, 
                 self.tables.sigma_pair,
-                typ,
-                rng,
+                compton_inv_cdf, K,
+                seed,
+                # outputs:
+                out_ph_pos, out_ph_dir, out_ph_E, out_ph_w, out_ph_ebin,
+                out_e_pos, out_e_dir, out_e_E, out_e_w,
+                out_po_pos, out_po_dir, out_po_E, out_po_w,
+                edep.view(-1),
                 Z=Z, Y=Y, X=X,
                 M=M, ECOUNT=ECOUNT,
-                BLOCK=256,
+                N=N,
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
-
-            # Interaction handling
-            # Photoelectric -> deposit all E2
-            pe = (typ == 1) & (E2 > 0) & (w2 > 0)
-            if torch.any(pe):
-                _deposit_local(
-                    pos=pos2,
-                    E=torch.where(pe, E2, torch.zeros_like(E2)),
-                    w=w2,
-                    edep_flat=edep.view(-1),
-                    Z=Z, Y=Y, X=X,
-                    voxel_size_cm=self.voxel_size_cm,
-                )
-                E2 = torch.where(pe, torch.zeros_like(E2), E2)
-                w2 = torch.where(pe, torch.zeros_like(w2), w2)
-
-            # Pair -> deposit all E2 (MVP)
-            pa = (typ == 4) & (E2 > 0) & (w2 > 0)
-            if torch.any(pa):
-                _deposit_local(
-                    pos=pos2,
-                    E=torch.where(pa, E2, torch.zeros_like(E2)),
-                    w=w2,
-                    edep_flat=edep.view(-1),
-                    Z=Z, Y=Y, X=X,
-                    voxel_size_cm=self.voxel_size_cm,
-                )
-                E2 = torch.where(pa, torch.zeros_like(E2), E2)
-                w2 = torch.where(pa, torch.zeros_like(w2), w2)
-
-            # Compton -> call kernel for all photons but only meaningful where typ==2
-            # To avoid additional gather/compaction in Milestone 2, we run it over full N and gate using E==0/w==0.
-            co = (typ == 2) & (E2 > 0) & (w2 > 0)
-            if torch.any(co):
-                # Use E==0 for non-co to no-op
-                E_in = torch.where(co, E2, torch.zeros_like(E2))
-                w_in = torch.where(co, w2, torch.zeros_like(w2))
-
-                photon_compton_kernel[grid](
-                    pos2, dir2, E_in, w_in, rng, ebin2,
-                    compton_inv_cdf, K,
-                    scat_pos, scat_dir, scat_E, scat_w, scat_rng, scat_ebin,
-                    e_pos, e_dir, e_E, e_w,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                )
-
-                # Deposit recoil electron energy locally
-                _deposit_local(
-                    pos=pos2,
-                    E=e_E,
-                    w=e_w,
-                    edep_flat=edep.view(-1),
-                    Z=Z, Y=Y, X=X,
-                    voxel_size_cm=self.voxel_size_cm,
-                )
-
-                # Update photon state only for Compton events; keep others unchanged.
-                co3 = co[:, None]
-                pos2 = torch.where(co3, scat_pos, pos2)
-                dir2 = torch.where(co3, scat_dir, dir2)
-                E2 = torch.where(co, scat_E, E2)
-                w2 = torch.where(co, scat_w, w2)
-                rng = torch.where(co, scat_rng, rng)
-                ebin2 = torch.where(co, scat_ebin, ebin2)
-
-            # Rayleigh -> direction change (energy conserved)
-            ra = (typ == 3) & (E2 > 0) & (w2 > 0)
-            if torch.any(ra):
-                E_in = torch.where(ra, E2, torch.zeros_like(E2))
-                w_in = torch.where(ra, w2, torch.zeros_like(w2))
-
-                photon_rayleigh_kernel[grid](
-                    pos2, dir2, E_in, w_in, rng, ebin2,
-                    scat_pos, scat_dir, scat_E, scat_w, scat_rng, scat_ebin,
-                    ECOUNT=ECOUNT,
-                    BLOCK=256,
-                )
-                ra3 = ra[:, None]
-                pos2 = torch.where(ra3, scat_pos, pos2)
-                dir2 = torch.where(ra3, scat_dir, dir2)
-                E2 = torch.where(ra, scat_E, E2)
-                w2 = torch.where(ra, scat_w, w2)
-                rng = torch.where(ra, scat_rng, rng)
-                ebin2 = torch.where(ra, scat_ebin, ebin2)
+            
+            # Update photon state after interaction
+            pos2 = out_ph_pos
+            dir2 = out_ph_dir
+            E2 = out_ph_E
+            w2 = out_ph_w
+            ebin2 = out_ph_ebin
 
             # Ping-pong
-            pos, direction, E, w, rng = pos2, dir2, E2, w2, rng
+            pos, direction, E, w, ebin = (
+                pos2, dir2, E2, w2, ebin2
+            )
 
         self._last_stats = PhotonOnlyStats(escaped_energy_MeV=float(escaped_energy.detach().cpu().item()))
         return edep
 
 
-def _deposit_local(*, pos: torch.Tensor, E: torch.Tensor, w: torch.Tensor, edep_flat: torch.Tensor,
-                   Z: int, Y: int, X: int, voxel_size_cm: tuple[float, float, float]) -> None:
-    if E.numel() == 0:
-        return
-    vx, vy, vz = voxel_size_cm
-    grid = (triton.cdiv(int(E.numel()), 256),)
-    deposit_local_energy_kernel[grid](
-        pos, E, w,
-        edep_flat,
-        Z=Z, Y=Y, X=X,
-        BLOCK=256,
-        voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
-    )
+

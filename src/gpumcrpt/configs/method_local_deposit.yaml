@@ -2,7 +2,7 @@
 # This method uses the MVP engine for local energy deposition
 
 device: cuda
-seed: 12345
+seed: 1234
 
 io:
   resample_ct_to_activity: false
@@ -48,5 +48,5 @@ monte_carlo:
   max_wavefront_iters: 10000
 
   triton:
-    engine: local_deposit
-    method: local_deposit
+    engine: localdepositonly
+    method: localdepositonly

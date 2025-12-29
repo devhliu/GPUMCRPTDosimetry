@@ -17,7 +17,7 @@ from gpumcrpt.materials.hu_materials import (
 from gpumcrpt.physics_tables.tables import PhysicsTables, load_physics_tables_h5
 from gpumcrpt.decaydb import load_icrp107_nuclide
 from gpumcrpt.source.sampling import sample_weighted_decays_and_primaries
-from gpumcrpt.transport.engine import TransportEngine
+from gpumcrpt.transport.engine_main import TransportEngine
 from gpumcrpt.dose.scoring import edep_to_dose_and_uncertainty
 
 
@@ -72,6 +72,8 @@ def run_dosimetry(
             return "photon_only"
         if e in {"em_condensed", "photon-em-condensedhistorymultiparticle", "photon_em_condensedhistory"}:
             return "photon_em_condensedhistory"
+        if e in {"em_energybucketed", "photon-em-energybucketed", "photon_em_energybucketed", "energy_bucketed", "energybucketed"}:
+            return "photon_em_energybucketed"
         return e
 
     # Load physics tables (or create dummy tables for local_deposit engine)
