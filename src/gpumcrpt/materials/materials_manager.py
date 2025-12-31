@@ -66,6 +66,11 @@ class MaterialsManager:
             'num_materials': len(config.material_library['materials']),
             'num_elements': len(config.material_library['elements'])
         }
+    
+    def get_table_config(self, table_name: Optional[str] = None):
+        """Get the configuration for a specific materials table."""
+        return (self.registry.get_table(table_name) 
+                if table_name else self.registry.get_default_table())
 
 
 def get_default_materials_manager() -> MaterialsManager:

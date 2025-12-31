@@ -1,37 +1,28 @@
-# Default HU Materials Table based on ICRU-44 and ICRP-110 standards
-# This is the default materials table for the GPUMCRPTDosimetry package
-
-name: "default_icru44"
-description: "Standard ICRU-44 based materials table with bone differentiation"
+name: "default_materials"
+description: "Standard ICRU-44 based materials table with bone differentiation (7 materials)"
 source: "ICRU-44/ICRP-110"
 is_default: true
 
-# HU to density mapping (linear interpolation between points)
 hu_to_density:
   - [-1000, 0.0012]   # Air
-  - [-950, 0.26]      # Lung (average)
-  - [-120, 0.95]      # Adipose/Fat
-  - [-50, 1.00]       # Soft Tissue/Water
-  - [40, 1.05]        # Muscle
-  - [100, 1.10]       # Trabecular Bone lower
-  - [600, 1.20]       # Trabecular Bone upper
-  - [600, 1.85]       # Cortical Bone lower
-  - [3000, 1.92]      # Cortical Bone upper
+  - [-900, 0.26]      # Lung tissue
+  - [-100, 0.95]      # Fat
+  - [0, 1.00]         # Soft Tissue
+  - [40, 1.06]        # Muscle
+  - [500, 1.16]       # Trabecular bone
+  - [1200, 1.85]      # Cortical bone
 
-# HU to material class mapping [HU_low, HU_high, material_id]
 hu_to_class:
-  - [-1000, -950, 0]   # air
-  - [-950, -400, 1]    # lung
-  - [-120, -50, 2]     # adipose_fat
-  - [-50, 40, 3]       # soft_tissue
-  - [40, 80, 4]        # muscle
-  - [100, 600, 5]      # trabecular_bone
-  - [600, 3000, 6]     # cortical_bone
+  - [-1000, -850, 0]   # air
+  - [-950, -850, 1]    # lung
+  - [-100, -50, 2]     # adipose_fat
+  - [0, 50, 3]         # soft_tissue
+  - [40, 100, 4]       # muscle
+  - [300, 800, 5]      # trabecular_bone
+  - [800, 2000, 6]     # cortical_bone
 
-# Material library configuration
 material_library:
   elements: ["H", "C", "N", "O", "P", "Ca", "Ar"]
-  
   materials:
     - name: "air"
       ref_density_g_cm3: 0.0012
@@ -43,7 +34,6 @@ material_library:
         P: 0.0
         Ca: 0.0
         Ar: 0.013
-    
     - name: "lung"
       ref_density_g_cm3: 0.26
       wfrac:
@@ -54,7 +44,6 @@ material_library:
         P: 0.002
         Ca: 0.0
         Ar: 0.0
-    
     - name: "adipose_fat"
       ref_density_g_cm3: 0.95
       wfrac:
@@ -65,7 +54,6 @@ material_library:
         P: 0.0
         Ca: 0.0
         Ar: 0.0
-    
     - name: "soft_tissue"
       ref_density_g_cm3: 1.00
       wfrac:
@@ -76,7 +64,6 @@ material_library:
         P: 0.0
         Ca: 0.0
         Ar: 0.0
-    
     - name: "muscle"
       ref_density_g_cm3: 1.05
       wfrac:
@@ -87,7 +74,6 @@ material_library:
         P: 0.002
         Ca: 0.0
         Ar: 0.0
-    
     - name: "trabecular_bone"
       ref_density_g_cm3: 1.15
       wfrac:
@@ -98,7 +84,6 @@ material_library:
         P: 0.034
         Ca: 0.078
         Ar: 0.0
-    
     - name: "cortical_bone"
       ref_density_g_cm3: 1.88
       wfrac:

@@ -27,6 +27,7 @@ to avoid duplicating:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -91,7 +92,7 @@ def run_dosimetry_from_config(
     else:
         output_unc_path = Path(out_unc)
 
-    run_dosimetry_pipeline(
+    execution_time = run_dosimetry_pipeline(
         activity_nifti_path=str(tia_path),
         ct_nifti_path=str(ct_path),
         sim_config=sim_config,
@@ -101,7 +102,13 @@ def run_dosimetry_from_config(
     )
 
     print(f"Dosimetry calculation completed for {method_name}")
+    print(f"Execution time: {execution_time:.2f} seconds")
     print(f"Results saved to: {output_dir}")
+
+    timing_file = output_dir / f"{str(nuclide_name).lower()}_timing_{method_name}.json"
+    with open(timing_file, "w", encoding="utf-8") as f:
+        json.dump({"execution_time_seconds": execution_time, "method": method_name, "nuclide": str(nuclide_name)}, f, indent=2)
+    print(f"Timing saved to: {timing_file}")
 
 
 def run_dosimetry_direct(
@@ -115,7 +122,7 @@ def run_dosimetry_direct(
     """Run dosimetry using direct NIfTI paths."""
     sim_config = load_config(sim_yaml_path)
 
-    run_dosimetry_pipeline(
+    execution_time = run_dosimetry_pipeline(
         activity_nifti_path=str(activity_path),
         ct_nifti_path=str(ct_path),
         sim_config=sim_config,
@@ -125,6 +132,7 @@ def run_dosimetry_direct(
     )
 
     print(f"Dosimetry calculation completed")
+    print(f"Execution time: {execution_time:.2f} seconds")
     print(f"Dose output: {out_dose}")
     print(f"Uncertainty output: {out_unc}")
 

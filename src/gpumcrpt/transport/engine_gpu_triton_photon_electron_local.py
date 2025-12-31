@@ -15,6 +15,10 @@ from gpumcrpt.utils.constants import ELECTRON_REST_MASS_MEV
 @dataclass
 class PhotonElectronLocalStats:
     escaped_energy_MeV: float
+    initial_energy_MeV: float = 0.0
+    deposited_energy_MeV: float = 0.0
+    energy_balance_error_MeV: float = 0.0
+    energy_balance_error_percent: float = 0.0
 
 
 class PhotonElectronLocalTransportEngine(BaseTransportEngine):
@@ -25,7 +29,7 @@ class PhotonElectronLocalTransportEngine(BaseTransportEngine):
     - Photoelectric: deposit full photon energy locally and kill photon
     - Compton: update photon kinematics, deposit recoil electron energy locally
     - Rayleigh: update direction, keep energy
-    - Pair: deposit full photon energy locally and kill (MVP)
+    - Pair: deposit full photon energy locally and kill
 
     Notes:
       - This engine currently deposits charged secondaries locally; electron/positron transport is Milestone 3+.
@@ -63,6 +67,16 @@ class PhotonElectronLocalTransportEngine(BaseTransportEngine):
         if alpha_local_edep is not None:
             edep += alpha_local_edep.to(device=self.device, dtype=torch.float32)
 
+        # Energy conservation tracking: calculate initial total energy
+        initial_photon_energy = float((primaries.photons["E_MeV"] * primaries.photons["w"]).sum().item())
+        initial_electron_energy = float((primaries.electrons["E_MeV"] * primaries.electrons["w"]).sum().item())
+        # For positrons, include rest mass energy (2 * 0.511 MeV) that will be deposited locally
+        initial_positron_kinetic = float((primaries.positrons["E_MeV"] * primaries.positrons["w"]).sum().item())
+        initial_positron_rest = float((primaries.positrons["w"].sum() * 2 * ELECTRON_REST_MASS_MEV).item())
+        initial_positron_energy = initial_positron_kinetic + initial_positron_rest
+        
+        initial_energy = initial_photon_energy + initial_electron_energy + initial_positron_energy
+
         # Deposit non-photon primaries locally (Milestone 2 scope)
         for q in (primaries.electrons, primaries.positrons):
             if q is None or q["E_MeV"].numel() == 0:
@@ -84,7 +98,16 @@ class PhotonElectronLocalTransportEngine(BaseTransportEngine):
 
         N = int(E.numel())
         if N == 0:
-            self._last_stats = PhotonElectronLocalStats(escaped_energy_MeV=0.0)
+            deposited_energy = float(edep.sum().item())
+            energy_balance_error = abs(initial_energy - deposited_energy)
+            energy_balance_error_percent = (energy_balance_error / initial_energy * 100.0) if initial_energy > 0 else 0.0
+            self._last_stats = PhotonElectronLocalStats(
+                escaped_energy_MeV=0.0,
+                initial_energy_MeV=initial_energy,
+                deposited_energy_MeV=deposited_energy,
+                energy_balance_error_MeV=energy_balance_error,
+                energy_balance_error_percent=energy_balance_error_percent,
+            )
             return edep
 
         # RNG seed for Triton kernels (Philox - stateless)
@@ -210,8 +233,7 @@ class PhotonElectronLocalTransportEngine(BaseTransportEngine):
                 real,
                 pos2, dir2, E2, w2, ebin2,
                 material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_rayleigh,
-                self.tables.sigma_pair,
+                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_pair,
                 compton_inv_cdf, K,
                 seed,
                 # outputs:
@@ -262,7 +284,27 @@ class PhotonElectronLocalTransportEngine(BaseTransportEngine):
                 pos2, dir2, E2, w2, ebin2
             )
 
-        self._last_stats = PhotonElectronLocalStats(escaped_energy_MeV=float(escaped_energy.detach().cpu().item()))
+        # Energy conservation check
+        deposited_energy = float(edep.sum().item())
+        escaped = float(escaped_energy.detach().cpu().item())
+        energy_balance_error = abs(initial_energy - (deposited_energy + escaped))
+        energy_balance_error_percent = (energy_balance_error / initial_energy * 100.0) if initial_energy > 0 else 0.0
+
+        # Enable energy conservation warnings if error exceeds threshold
+        enable_energy_check = bool(self.sim_config.get("monte_carlo", {}).get("enable_energy_conservation_check", False))
+        if enable_energy_check and energy_balance_error_percent > 1.0:
+            print(f"WARNING: Energy conservation error: {energy_balance_error:.6f} MeV ({energy_balance_error_percent:.4f}%)")
+            print(f"  Initial energy: {initial_energy:.6f} MeV")
+            print(f"  Deposited energy: {deposited_energy:.6f} MeV")
+            print(f"  Escaped energy: {escaped:.6f} MeV")
+
+        self._last_stats = PhotonElectronLocalStats(
+            escaped_energy_MeV=escaped,
+            initial_energy_MeV=initial_energy,
+            deposited_energy_MeV=deposited_energy,
+            energy_balance_error_MeV=energy_balance_error,
+            energy_balance_error_percent=energy_balance_error_percent,
+        )
         return edep
 
 

@@ -61,64 +61,6 @@ def _interp1d_piecewise_linear(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tens
     return y.reshape(x.shape)
 
 
-def build_default_materials_library(device: str | torch.device = "cuda") -> MaterialsLibrary:
-    """Five-compartment model plus bone classes for HU to electron density mapping.
-    
-    Based on the five-compartment model with bone class differentiation:
-    - Air: HU < -850
-    - Lung: -850 to -910 HU  
-    - Fat: -100 to -50 HU
-    - Muscle: +10 to +40 HU
-    - Soft Tissue: 0 to +50 HU
-    - Bone: +150 to +3000 HU (trabecular and cortical)
-    """
-    device = torch.device(device)
-
-    element_symbol = ["H", "C", "N", "O", "P", "Ca", "Ar"]
-    element_Z = torch.tensor([1, 6, 7, 8, 15, 20, 18], device=device, dtype=torch.int32)
-
-    material_names = ["air", "lung", "fat", "muscle", "soft_tissue", "bone"]
-    ref_density_g_cm3 = torch.tensor([
-        0.0012,    # Air
-        0.355,     # Lung (average of 0.205-0.507 range)
-        0.95,      # Fat
-        1.06,      # Muscle
-        1.00,      # Soft Tissue
-        1.507,     # Bone (average of 1.16-1.85 range)
-    ], device=device, dtype=torch.float32)
-
-    # Elemental compositions (mass fractions) based on documentation
-    # Air: N 75.5%, O 23.2%, Ar 1.3%
-    w_air = [0.0, 0.0, 0.755, 0.232, 0.0, 0.0, 0.013]
-    
-    # Lung: Similar to soft tissue, lower density (using soft tissue composition)
-    w_lung = [0.101, 0.111, 0.026, 0.762, 0.0, 0.0, 0.0]
-    
-    # Fat: H 11.4%, C 59.8%, N 0.7%, O 27.8%
-    w_fat = [0.114, 0.598, 0.007, 0.281, 0.0, 0.0, 0.0]
-    
-    # Muscle: H 10.2%, C 12.3%, N 3.5%, O 72.9%
-    w_muscle = [0.102, 0.123, 0.035, 0.729, 0.0, 0.0, 0.0]
-    
-    # Soft Tissue: H 10.1%, C 11.1%, N 2.6%, O 76.2%
-    w_soft_tissue = [0.101, 0.111, 0.026, 0.762, 0.0, 0.0, 0.0]
-    
-    # Bone: H 3.4%, C 15.5%, N 4.2%, O 43.5%, P 10.3%, Ca 22.5%
-    w_bone = [0.034, 0.155, 0.042, 0.435, 0.103, 0.225, 0.0]
-
-    material_wfrac = torch.tensor([w_air, w_lung, w_fat, w_muscle, w_soft_tissue, w_bone], 
-                                 device=device, dtype=torch.float32)
-    material_wfrac = material_wfrac / torch.clamp(material_wfrac.sum(dim=1, keepdim=True), min=1e-12)
-
-    return MaterialsLibrary(
-        element_symbol=element_symbol,
-        element_Z=element_Z,
-        material_names=material_names,
-        ref_density_g_cm3=ref_density_g_cm3,
-        material_wfrac=material_wfrac,
-    )
-
-
 def build_materials_library_from_config(
     cfg: Mapping,
     *,

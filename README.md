@@ -84,7 +84,7 @@ src/gpumcrpt/
 │   └── relaxation_tables.py # Atomic relaxation data
 ├── transport/               # Particle transport engines
 │   ├── engine.py            # Transport engine selector
-	│   ├── engine_gpu_triton_localdepositonly.py          # Local deposition MVP
+	│   ├── engine_gpu_triton_localdepositonly.py          # Local deposition
 	│   ├── engine_gpu_triton_photon_electron_condensed.py # Full EM condensed history
 │   ├── engine_gpu_triton_photon_electron_local.py  # Photon-electron local mode
 │   ├── triton/              # Triton GPU kernels
@@ -123,7 +123,7 @@ src/gpumcrpt/
 ### Interaction Processes
 
 #### Photon Transport
-- **Photoelectric effect**: Creates photoelectrons with full photon energy (binding energy negligible in MVP)
+- **Photoelectric effect**: Creates photoelectrons with full photon energy (binding energy negligible)
 - **Compton scattering**: Uses inverse-CDF sampling with cos(θ) convention
 - **Rayleigh scattering**: Elastic scattering with minimal energy loss
 - **Pair production**: Creates e⁺e⁻ pairs above 1.022 MeV
@@ -139,7 +139,7 @@ src/gpumcrpt/
 
 #### Atomic Relaxation
 - Fluorescence X-rays from photoelectric vacancies
-- Auger electron emission (placeholder tables in MVP)
+- Auger electron emission (placeholder tables)
 
 ### Energy Ranges
 - **Photons**: 10 keV – 3 MeV
@@ -220,7 +220,7 @@ monte_carlo:
   n_histories: 1000000
   n_batches: 10
   triton:
-    engine: "photon_electron_condensed"  # or "mvp", "photon_electron_local"
+    engine: "photon_electron_condensed"  # or "local_deposit", "photon_electron_local"
     allow_placeholder_samplers: false
 
 cutoffs:
@@ -312,7 +312,7 @@ Designed for clinical-scale simulations:
 
 This is a research prototype currently under active development. The package follows a milestone-based development approach:
 
-- **Milestone 1**: Runnable MVP with local energy deposition
+- **Milestone 1**: Runnable implementation with local energy deposition
 - **Milestone 2**: Photon-electron local transport implementation
 - **Milestone 3**: Electron/positron condensed-history transport
 - **Milestone 4**: Clinical realism with material compositions

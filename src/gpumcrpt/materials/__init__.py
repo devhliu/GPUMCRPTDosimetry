@@ -1,7 +1,6 @@
 from gpumcrpt.materials.hu_materials import (
 	MaterialsLibrary,
 	MaterialsVolume,
-	build_default_materials_library,
 	build_materials_from_hu,
 	build_materials_library_from_config,
 	compute_material_effective_atom_Z,

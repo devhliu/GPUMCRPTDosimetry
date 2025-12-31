@@ -58,7 +58,7 @@ python scripts/run_dosimetry_nifti.py \
 1. **Pipeline Layer** (`src/gpumcrpt/python_api/pipeline.py`): Main entry point that orchestrates the entire dosimetry workflow from NIfTI input to dose output
 
 2. **Transport Engines** (`src/gpumcrpt/transport/`): Multiple transport implementations:
-   - `engine_gpu_triton_localdepositonly.py`: MVP with local energy deposition
+   - `engine_gpu_triton_localdepositonly.py`: Local energy deposition
    - `engine_gpu_triton_photon_electron_condensed.py`: Full photon + electron/positron transport
    - `engine_gpu_triton_photon_electron_local.py`: Photon-electron local transport
    - Uses Triton 3.5.1 for GPU kernel compilation
@@ -94,7 +94,7 @@ python scripts/run_dosimetry_nifti.py \
 
 Simulations configured via YAML with key sections:
 - `simulation`: Basic parameters (nuclide, histories, batches, device)
-- `monte_carlo`: Transport engine selection (`mvp`, `photon_electron_local`, `photon_electron_condensed`)
+- `monte_carlo`: Transport engine selection (`local_deposit`, `photon_electron_local`, `photon_electron_condensed`)
 - `cutoffs`: Energy cutoffs for particles (keV)
 - `materials`: HU-to-density/class mappings
 - `physics_tables`: Path to physics data file

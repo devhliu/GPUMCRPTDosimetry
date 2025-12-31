@@ -36,11 +36,10 @@ def _project_src_dir() -> Path:
 sys.path.insert(0, str(_project_src_dir()))
 
 from gpumcrpt.materials.hu_materials import (
-    build_default_materials_library,
     build_materials_library_from_config,
     compute_material_effective_atom_Z,
 )
-from gpumcrpt.materials.materials_registry import get_default_registry
+from gpumcrpt.materials.materials_manager import get_default_materials_manager
 
 
 AVOGADRO = 6.02214076e23
@@ -146,8 +145,8 @@ def _make_inv_cdf_delta(ECOUNT: int, K: int = 256, xmin: float = 1e-4, xmax: flo
 
 
 def main() -> None:
-    registry = get_default_registry()
-    available_material_libraries = ["default_materials", *registry.list_tables()]
+    materials_manager = get_default_materials_manager()
+    available_material_libraries = materials_manager.get_available_tables()
 
     parser = argparse.ArgumentParser(description="Generate pre-computed physics tables for GPUMCRPTDosimetry.")
     parser.add_argument(
@@ -179,14 +178,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{args.material_library}-{args.physics_mode}.h5"
 
-    if args.material_library == "default_materials":
-        materials_library = build_default_materials_library(device="cpu")
-    else:
-        mat_table_config = registry.get_table(args.material_library)
-        materials_library = build_materials_library_from_config(
-            cfg={"material_library": mat_table_config.material_library},
-            device="cpu",
-        )
+    mat_table_config = materials_manager.get_table_config(args.material_library)
+    materials_library = build_materials_library_from_config(
+        cfg={"material_library": mat_table_config.material_library},
+        device="cpu",
+    )
     mat_names = list(materials_library.material_names)
     num_materials = len(mat_names)
 

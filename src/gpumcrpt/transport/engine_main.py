@@ -40,7 +40,7 @@ class TransportEngine:
         edep_batches = torch.zeros((n_batches, Z, Y, X), device=self.device, dtype=torch.float32)
 
         triton_cfg = self.sim_config.get("monte_carlo", {}).get("triton", {})
-        triton_engine = str(triton_cfg.get("engine", "mvp")).lower()
+        triton_engine = str(triton_cfg.get("engine", "local_deposit")).lower()
 
         # Import locally to avoid circular imports
         from gpumcrpt.transport.engine_gpu_triton_localdeposit_only import LocalDepositOnlyTransportEngine
@@ -78,7 +78,7 @@ class TransportEngine:
                 voxel_size_cm=self.voxel_size_cm,
                 device=self.device,
             )
-        elif triton_engine in {"mvp", "localdepositonly", "local_deposit", "local-deposit"}:
+        elif triton_engine in {"localdepositonly", "local_deposit", "local-deposit"}:
             tr_engine = LocalDepositOnlyTransportEngine(
                 mats=self.mats,
                 tables=self.tables,
@@ -89,7 +89,7 @@ class TransportEngine:
         else:
             raise ValueError(
                 f"Unknown monte_carlo.triton.engine={triton_engine!r} (expected "
-                "'mvp'/'localdepositonly'/'local_deposit', "
+                "'localdepositonly'/'local_deposit', "
                 "'photon_electron_local', "
                 "'photon_electron_condensed', "
                 "or 'em_energybucketed'/'photon-em-energybucketed')"

@@ -291,7 +291,7 @@ io:
 
 # Physics model selection
 physics:
-  transport_model: "photon_electron_condensed"  # Options: mvp, photon_electron_local, photon_electron_condensed
+  transport_model: "photon_electron_condensed"  # Options: local_deposit, photon_electron_local, photon_electron_condensed
   include_relaxation: false
   include_bremsstrahlung: true
 ```

@@ -36,8 +36,8 @@ The simulation proceeds in a loop, with each iteration representing a "step" for
 
 The project has seen the development of several transport engines, each with increasing physical realism and performance.
 
-### 1. `LocalDepositOnly–NoTransport (MVP)`
-*   **Purpose:** A minimal viable product (MVP) engine to get the pipeline running.
+### 1. `LocalDepositOnly–NoTransport`
+*   **Purpose:** A minimal engine to get the pipeline running.
 *   **Functionality:** All particle energy is deposited locally in the voxel where the particle was created. There is no actual particle transport.
 
 ### 2. `PhotonWavefront–WoodcockFlight (Milestone 2)`

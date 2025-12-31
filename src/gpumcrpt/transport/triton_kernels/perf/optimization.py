@@ -191,7 +191,7 @@ def estimate_occupancy(block_size: int,
 
 
 def get_optimal_kernel_config(data_size: int,
-                            device: torch.device,
+                            device,
                             shared_mem_required: int = 0,
                             register_pressure: int = 32) -> Tuple[int, int]:
     """
@@ -199,13 +199,16 @@ def get_optimal_kernel_config(data_size: int,
     
     Args:
         data_size: Number of elements to process
-        device: Target device
+        device: Target device (str or torch.device)
         shared_mem_required: Shared memory required per block
         register_pressure: Register usage per thread
         
     Returns:
         Tuple of (block_size, grid_size)
     """
+    if isinstance(device, str):
+        device = torch.device(device)
+    
     optimizer = GPUConfigOptimizer(device)
     
     block_size = optimizer.optimize_block_size(

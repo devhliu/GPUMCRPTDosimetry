@@ -146,21 +146,28 @@ def rotate_direction_to_frame(ux: tl.float32, uy: tl.float32, uz: tl.float32,
 
 @triton.autotune(
     configs=[
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 2, 'NUM_STAGES': 4}),
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 32, 'NUM_STAGES': 1}),
     ],
-    key=['BLOCK_SIZE'],
-    warmup=10,
-    rep=20,
+    key=['N', 'BLOCK_SIZE'],
+    warmup=15,
+    rep=30,
 )
 @triton.jit
 def charged_particle_brems_emit_kernel(
@@ -268,21 +275,28 @@ def charged_particle_brems_emit_kernel(
 
 @triton.autotune(
     configs=[
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 2, 'NUM_STAGES': 4}),
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 32, 'NUM_STAGES': 1}),
     ],
-    key=['BLOCK_SIZE'],
-    warmup=10,
-    rep=20,
+    key=['N', 'BLOCK_SIZE'],
+    warmup=15,
+    rep=30,
 )
 @triton.jit
 def charged_particle_delta_emit_kernel(
@@ -391,21 +405,28 @@ def charged_particle_delta_emit_kernel(
 
 @triton.autotune(
     configs=[
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 2, 'NUM_STAGES': 4}),
+        triton.Config({'BLOCK_SIZE': 64, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 128, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 4}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 256, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 4, 'NUM_STAGES': 3}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 8, 'NUM_STAGES': 3}),
+        triton.Config({'BLOCK_SIZE': 512, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 8, 'NUM_STAGES': 2}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
         triton.Config({'BLOCK_SIZE': 1024, 'NUM_WARPS': 16, 'NUM_STAGES': 2}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 16, 'NUM_STAGES': 1}),
+        triton.Config({'BLOCK_SIZE': 2048, 'NUM_WARPS': 32, 'NUM_STAGES': 1}),
     ],
-    key=['BLOCK_SIZE'],
-    warmup=10,
-    rep=20,
+    key=['N', 'BLOCK_SIZE'],
+    warmup=15,
+    rep=30,
 )
 @triton.jit
 def positron_annihilation_at_rest_kernel(

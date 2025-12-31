@@ -60,6 +60,7 @@ from gpumcrpt.transport.triton_kernels.charged_particle.emission import (
     charged_particle_brems_emit_kernel,
     charged_particle_delta_emit_kernel,
 )
+from gpumcrpt.transport.triton_kernels.utils.sampler import sample_inv_cdf_1d_philox
 from gpumcrpt.utils.constants import ELECTRON_REST_MASS_MEV, PI
 from gpumcrpt.transport.triton_kernels.utils.gpu_math import fast_sqrt_approx, fast_log_approx, fast_exp_approx, fast_acos_approx, fast_sin_cos_approx, fast_sin_approx, fast_cos_approx
 
@@ -98,13 +99,14 @@ def _apply_common_charged_particle_physics(
     is_positron = particle_type == 1
 
     # Optimized step size calculation
+    # Limit step size to f_range * CSDA range for condensed history approximation
     step_range_based = range_csda * f_range
     max_step_size = tl.minimum(voxel_size_x_cm, tl.minimum(voxel_size_y_cm, voxel_size_z_cm))
     step_size_cm = tl.minimum(step_range_based, max_step_size * 0.5)
     step_size_cm = tl.maximum(step_size_cm, 1e-6)  # Safety minimum
 
     # Vectorized energy loss with straggling
-    dE_mean = step_size_cm * S_restricted * weight
+    dE_mean = step_size_cm * S_restricted
     u1, u2, u3, u4, nc0, nc1, nc2, nc3 = rand_uniform4(k0, k1, c0, c1, c2, c3)
 
     # Optimized Vavilov sampling (vectorized)
@@ -199,6 +201,7 @@ def _apply_common_charged_particle_physics(
         new_dir_x, new_dir_y, new_dir_z,     # Updated direction
         E_new,                              # Updated energy
         dE_actual,                          # Energy loss for deposition
+        step_size_cm,                       # Step size for range tracking
         nc0, nc1, nc2, nc3,                # Updated RNG counters
         should_annihilate,                   # Positron annihilation flag
         brem_prob,                          # Bremsstrahlung probability
@@ -259,6 +262,9 @@ def charged_particle_step_kernel(
     particle_material_id: tl.tensor,
     particle_alive: tl.tensor,
 
+    # Range tracking for range-based cutoff
+    particle_range_remaining: tl.tensor,  # Track remaining range for each particle
+
     # RNG seed (stateless Philox)
     rng_seed: tl.tensor,
 
@@ -268,6 +274,10 @@ def charged_particle_step_kernel(
     range_cdsa_table: tl.tensor,
     P_brem_table: tl.tensor,
     P_delta_table: tl.tensor,
+
+    # Inverse CDF tables for energy sampling
+    brem_inv_cdf_table: tl.tensor,
+    delta_inv_cdf_table: tl.tensor,
 
     # Energy binning
     energy_bin_edges: tl.tensor,
@@ -289,6 +299,7 @@ def charged_particle_step_kernel(
     ann_photon1_dir_x: tl.tensor,
     ann_photon1_dir_y: tl.tensor,
     ann_photon1_dir_z: tl.tensor,
+    ann_photon1_E_MeV: tl.tensor,
     ann_photon1_alive: tl.tensor,
 
     ann_photon2_pos_x: tl.tensor,
@@ -297,6 +308,7 @@ def charged_particle_step_kernel(
     ann_photon2_dir_x: tl.tensor,
     ann_photon2_dir_y: tl.tensor,
     ann_photon2_dir_z: tl.tensor,
+    ann_photon2_E_MeV: tl.tensor,
     ann_photon2_alive: tl.tensor,
 
     # Secondary electron/positron outputs
@@ -325,6 +337,9 @@ def charged_particle_step_kernel(
     num_energy_bins: tl.constexpr,
     e_cut_MeV: tl.constexpr,
     f_range: tl.constexpr,
+    enable_range_cutoff: tl.constexpr,
+    secondary_brem_threshold_MeV: tl.constexpr,
+    secondary_delta_threshold_MeV: tl.constexpr,
     Z: tl.constexpr,
     Y: tl.constexpr,
     X: tl.constexpr,
@@ -356,9 +371,17 @@ def charged_particle_step_kernel(
     # Load particle state with proper masking
     alive = tl.load(particle_alive + offset, mask=mask, other=0).to(tl.int1)
     E = tl.load(particle_E_MeV + offset, mask=mask, other=0.0).to(tl.float32)
+    
+    # Load remaining range for range-based cutoff
+    range_remaining = tl.load(particle_range_remaining + offset, mask=mask, other=0.0).to(tl.float32)
 
     # Only process alive particles with energy above cutoff
     should_process = alive & (E > e_cut_MeV)
+    
+    # Range-based cutoff: kill particles that have exhausted their range
+    if enable_range_cutoff:
+        should_process = should_process & (range_remaining > 0)
+    
     mask = mask & should_process
 
     # Load arrays with optimal access pattern and masking
@@ -394,7 +417,7 @@ def charged_particle_step_kernel(
     # Apply unified physics
     (new_pos_x, new_pos_y, new_pos_z,
      new_dir_x, new_dir_y, new_dir_z,
-     E_new, dE_loss, c0, c1, c2, c3,
+     E_new, dE_loss, step_size_cm, c0, c1, c2, c3,
      should_annihilate, brem_prob, delta_prob) = _apply_common_charged_particle_physics(
         pos_x, pos_y, pos_z,      # position components
         dir_x, dir_y, dir_z,      # direction components
@@ -414,6 +437,12 @@ def charged_particle_step_kernel(
     tl.store(particle_pos_x + offset, new_pos_x, mask=mask)
     tl.store(particle_pos_y + offset, new_pos_y, mask=mask)
     tl.store(particle_pos_z + offset, new_pos_z, mask=mask)
+    
+    # Update remaining range for range-based cutoff
+    if enable_range_cutoff:
+        # Subtract step size from remaining range
+        range_remaining = tl.where(mask, range_remaining - step_size_cm, range_remaining)
+        tl.store(particle_range_remaining + offset, range_remaining, mask=mask)
 
     # Deposit energy loss to dose grid
     # Calculate voxel coordinates from new position
@@ -446,13 +475,18 @@ def charged_particle_step_kernel(
 
     # Handle active particles (secondary production)
     # Bremsstrahlung emission
-    u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, c0, c1, c2, c3 = rand_uniform16(k0, k1, c0, c1, c2, c3)
+    u1, u2, u3, u4, c0, c1, c2, c3 = rand_uniform4(k0, k1, c0, c1, c2, c3)
 
     brem_emit_mask = (u1 < brem_prob) & (E_new > 0.1) & active_mask
 
-    # Sample photon energy with Bethe-Heitler spectrum
-    brems_photon_energy = _sample_bethe_heitler_energy(u2, u3, u4, u5, u6, u7, u8, u9, u10, E_new, Z.to(tl.float32))
-    brems_valid_mask = (brems_photon_energy > 0.01) & brem_emit_mask
+    # Sample photon energy fraction using physics tables
+    # brem_inv_cdf_table contains the inverse CDF for energy fraction k = photon_energy / E_initial
+    # Energy conservation: E_parent = E_initial - E_photon
+    brem_k_frac, c0, c1, c2, c3 = sample_inv_cdf_1d_philox(
+        brem_inv_cdf_table, ebin, k0, k1, c0, c1, c2, c3, K=100
+    )
+    brems_photon_energy = brem_k_frac * E_new
+    brems_valid_mask = (brems_photon_energy > secondary_brem_threshold_MeV) & brem_emit_mask
 
     # Update parent energy for bremsstrahlung
     E_with_brem = E_new - brems_photon_energy
@@ -469,11 +503,18 @@ def charged_particle_step_kernel(
     tl.store(photon_alive + offset, 1, mask=brems_valid_mask)
 
     # Delta ray production
-    delta_emit_mask = (u11 < delta_prob) & (E_new > 0.05) & active_mask
+    u5, u6, u7, u8, c0, c1, c2, c3 = rand_uniform4(k0, k1, c0, c1, c2, c3)
 
-    # Sample delta energy with Moller scattering
-    delta_energy = _sample_moller_delta_energy(u12, u13, u14, u15, u16, u1, u2, u3, u4, E_new, Z.to(tl.float32), ELECTRON_REST_MASS_MEV)
-    delta_valid_mask = (delta_energy > 0.001) & delta_emit_mask
+    delta_emit_mask = (u5 < delta_prob) & (E_new > 0.05) & active_mask
+
+    # Sample delta energy fraction using physics tables
+    # delta_inv_cdf_table contains the inverse CDF for energy fraction k = delta_energy / E_initial
+    # Energy conservation: E_primary = E_initial - E_delta
+    delta_k_frac, c0, c1, c2, c3 = sample_inv_cdf_1d_philox(
+        delta_inv_cdf_table, ebin, k0, k1, c0, c1, c2, c3, K=100
+    )
+    delta_energy = delta_k_frac * E_new
+    delta_valid_mask = (delta_energy > secondary_delta_threshold_MeV) & delta_emit_mask
 
     # Update primary energy for delta ray
     E_with_delta = E_new - delta_energy
@@ -489,7 +530,7 @@ def charged_particle_step_kernel(
     sin_theta_delta = fast_sqrt_approx(1.0 - cos_theta_delta * cos_theta_delta)
 
     # Random azimuthal angle
-    phi_delta = 2.0 * PI * u13
+    phi_delta = 2.0 * PI * u6
 
     delta_dir_x = new_dir_x * cos_theta_delta + sin_theta_delta * (new_dir_y * tl.cos(phi_delta))
     delta_dir_y = new_dir_y * cos_theta_delta + sin_theta_delta * (new_dir_z * tl.sin(phi_delta))
@@ -517,8 +558,8 @@ def charged_particle_step_kernel(
     u1, u2, u3, u4, c0, c1, c2, c3 = rand_uniform4(k0, k1, c0, c1, c2, c3)
 
     # Marsaglia method for isotropic direction (unrolled to avoid while loop)
-    u_x = 2.0 * u14 - 1.0
-    u_y = 2.0 * u15 - 1.0
+    u_x = 2.0 * u1 - 1.0
+    u_y = 2.0 * u2 - 1.0
     s = u_x * u_x + u_y * u_y
 
     # If s >= 1, use alternative direction (simplified)
@@ -541,13 +582,16 @@ def charged_particle_step_kernel(
     photon2_dir_y = -photon1_dir_y
     photon2_dir_z = -photon1_dir_z
 
-    # Store annihilation photons
+    # Store annihilation photons with correct energy (0.511 MeV each)
+    # Energy conservation: total energy before = E_kinetic + 2*0.511 MeV
+    # After annihilation: E_kinetic deposited locally + 2*0.511 MeV in photons
     tl.store(ann_photon1_pos_x + offset, new_pos_x, mask=annihilation_mask)
     tl.store(ann_photon1_pos_y + offset, new_pos_y, mask=annihilation_mask)
     tl.store(ann_photon1_pos_z + offset, new_pos_z, mask=annihilation_mask)
     tl.store(ann_photon1_dir_x + offset, photon1_dir_x, mask=annihilation_mask)
     tl.store(ann_photon1_dir_y + offset, photon1_dir_y, mask=annihilation_mask)
     tl.store(ann_photon1_dir_z + offset, photon1_dir_z, mask=annihilation_mask)
+    tl.store(ann_photon1_E_MeV + offset, ELECTRON_REST_MASS_MEV, mask=annihilation_mask)
     tl.store(ann_photon1_alive + offset, 1, mask=annihilation_mask)
 
     tl.store(ann_photon2_pos_x + offset, new_pos_x, mask=annihilation_mask)
@@ -556,6 +600,7 @@ def charged_particle_step_kernel(
     tl.store(ann_photon2_dir_x + offset, photon2_dir_x, mask=annihilation_mask)
     tl.store(ann_photon2_dir_y + offset, photon2_dir_y, mask=annihilation_mask)
     tl.store(ann_photon2_dir_z + offset, photon2_dir_z, mask=annihilation_mask)
+    tl.store(ann_photon2_E_MeV + offset, ELECTRON_REST_MASS_MEV, mask=annihilation_mask)
     tl.store(ann_photon2_alive + offset, 1, mask=annihilation_mask)
 
     # Mark particles that should not be processed as dead

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+import time
 
 import nibabel as nib
 import numpy as np
@@ -10,10 +11,10 @@ import torch
 
 from nibabel.processing import resample_from_to
 from gpumcrpt.materials.hu_materials import (
-    build_default_materials_library,
     build_materials_from_hu,
     build_materials_library_from_config,
 )
+from gpumcrpt.materials.materials_manager import get_default_materials_manager
 from gpumcrpt.physics_tables.tables import PhysicsTables, load_physics_tables_h5
 from gpumcrpt.decaydb import load_icrp107_nuclide
 from gpumcrpt.source.sampling import sample_weighted_decays_and_primaries
@@ -35,8 +36,9 @@ def run_dosimetry(
     output_dose_path: str,
     output_unc_path: str,
     device: Optional[str] = None,
-) -> None:
+) -> float:
     device = device or sim_config.get("device", "cuda")
+    start_time = time.time()
 
     act_img = nib.load(activity_nifti_path)
     ct_img = nib.load(ct_nifti_path)
@@ -51,22 +53,30 @@ def run_dosimetry(
     hu = torch.from_numpy(ct_data).to(device=device, dtype=torch.float32)
 
     materials_cfg = sim_config.get("materials", {})
+    materials_manager = get_default_materials_manager()
+    
+    mat_lib = None
     if materials_cfg.get("material_library", None) is not None:
         mat_lib = build_materials_library_from_config(materials_cfg, device=device)
+        mats = build_materials_from_hu(
+            hu=hu,
+            hu_to_density=sim_config["materials"]["hu_to_density"],
+            hu_to_class=sim_config["materials"]["hu_to_class"],
+            material_library=mat_lib,
+            device=device,
+        )
     else:
-        mat_lib = build_default_materials_library(device=device)
-
-    mats = build_materials_from_hu(
-        hu=hu,
-        hu_to_density=sim_config["materials"]["hu_to_density"],
-        hu_to_class=sim_config["materials"]["hu_to_class"],
-        material_library=mat_lib,
-        device=device,
-    )
+        table_name = materials_cfg.get("name", None)
+        mats = materials_manager.get_materials_volume(
+            hu_volume=hu,
+            table_name=table_name,
+            device=device
+        )
+        mat_lib = mats.lib
 
     def _engine_to_physics_mode(engine_name: str) -> str:
         e = str(engine_name).lower()
-        if e in {"mvp", "localdepositonly", "local_deposit", "local-deposit"}:
+        if e in {"localdepositonly", "local_deposit", "local-deposit"}:
             return "local_deposit"
         if e == "photon_electron_local":
             return "photon_electron_local"
@@ -77,7 +87,7 @@ def run_dosimetry(
         return e
 
     # Load physics tables (or create dummy tables for local_deposit engine)
-    triton_engine = sim_config.get("monte_carlo", {}).get("triton", {}).get("engine", "mvp")
+    triton_engine = sim_config.get("monte_carlo", {}).get("triton", {}).get("engine", "local_deposit")
     physics_mode = _engine_to_physics_mode(triton_engine)
 
     if physics_mode == "local_deposit":
@@ -107,14 +117,21 @@ def run_dosimetry(
         )
     else:
         physics_tables_cfg = sim_config["physics_tables"]
-        material_library_name = sim_config.get("materials", {}).get("name", "default_materials")
-        h5_filename = f"{material_library_name}-{physics_mode}.h5"
+        
+        if materials_cfg.get("material_library", None) is not None:
+            material_library_name = "custom"
+            h5_filename = f"{material_library_name}-{physics_mode}.h5"
+        else:
+            material_library_name = sim_config.get("materials", {}).get("name", "default_materials")
+            h5_filename = f"{material_library_name}-{physics_mode}.h5"
+        
         h5_path = Path(physics_tables_cfg.get("directory", "src/gpumcrpt/physics_tables/precomputed_tables")) / h5_filename
 
         if not h5_path.exists():
             raise FileNotFoundError(
                 f"Physics table not found at {h5_path}. "
-                "Generate it first using scripts/generate_physics_tables.py."
+                "Generate it first using scripts/generate_physics_tables.py "
+                f"with --material_library {material_library_name} --physics_mode {physics_mode}."
             )
 
         tables = load_physics_tables_h5(str(h5_path), device=device)
@@ -170,3 +187,6 @@ def run_dosimetry(
     nib.save(dose_img, output_dose_path)
     nib.save(unc_img, output_unc_path)
     nib.save(unc_img, output_unc_path)
+    
+    execution_time = time.time() - start_time
+    return execution_time

@@ -25,6 +25,9 @@ from gpumcrpt.transport.triton_kernels.charged_particle import (
 # Tally/Deposit kernels
 from gpumcrpt.transport.triton_kernels.utils.deposit import deposit_local_energy_kernel
 
+# Optimization utilities
+from gpumcrpt.transport.triton_kernels.perf.optimization import get_optimal_kernel_config
+
 # Physics constants
 from gpumcrpt.utils.constants import ELECTRON_REST_MASS_MEV, PI
 
@@ -35,6 +38,10 @@ class CondensedHistoryMultiParticleStats:
     annihilations: int
     brems_photons: int
     delta_electrons: int
+    initial_energy_MeV: float = 0.0
+    deposited_energy_MeV: float = 0.0
+    energy_balance_error_MeV: float = 0.0
+    energy_balance_error_percent: float = 0.0
 
 
 class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
@@ -42,7 +49,7 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
 
     Modern implementation using high-performance unified kernels.
 
-    Scope (MVP):
+    Scope:
     - Photons: Milestone-2 Woodcock flight + classify + Compton/PE.
       * Compton uses isotropic cos(theta) sampling (bring-up choice).
       * Photoelectric deposits all photon energy locally (Option B - faster, consistent with photon_electron_local mode).
@@ -58,7 +65,7 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
     - Modern physics models: Molière scattering, Vavilov straggling, Bethe-Heitler
 
     Notes:
-    - Brems/delta secondaries are spawned (MVP: single-generation; children do not spawn further secondaries).
+    - Brems/delta secondaries are spawned (single-generation; children do not spawn further secondaries).
     - Requires CUDA.
     """
 
@@ -98,6 +105,17 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         annihilations = 0
         brems_photons = 0
         delta_electrons = 0
+
+        # Energy conservation tracking: calculate initial total energy
+        # Sum of all primary particle energies weighted by their weights
+        initial_photon_energy = float((primaries.photons["E_MeV"] * primaries.photons["w"]).sum().item())
+        initial_electron_energy = float((primaries.electrons["E_MeV"] * primaries.electrons["w"]).sum().item())
+        # For positrons, include rest mass energy (2 * 0.511 MeV) that will be released upon annihilation
+        initial_positron_kinetic = float((primaries.positrons["E_MeV"] * primaries.positrons["w"]).sum().item())
+        initial_positron_rest = float((primaries.positrons["w"].sum() * 2 * ELECTRON_REST_MASS_MEV).item())
+        initial_positron_energy = initial_positron_kinetic + initial_positron_rest
+        
+        initial_energy = initial_photon_energy + initial_electron_energy + initial_positron_energy
 
         # Run photons (including any initial photons)
         sec = self.sim_config.get("electron_transport", {})
@@ -147,11 +165,28 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         brems_photons += n_b2
         delta_electrons += n_d2
 
+        # Energy conservation check
+        deposited_energy = float(edep.sum().item())
+        energy_balance_error = abs(initial_energy - (deposited_energy + escaped))
+        energy_balance_error_percent = (energy_balance_error / initial_energy * 100.0) if initial_energy > 0 else 0.0
+
+        # Enable energy conservation warnings if error exceeds threshold
+        enable_energy_check = bool(self.sim_config.get("monte_carlo", {}).get("enable_energy_conservation_check", False))
+        if enable_energy_check and energy_balance_error_percent > 1.0:
+            print(f"WARNING: Energy conservation error: {energy_balance_error:.6f} MeV ({energy_balance_error_percent:.4f}%)")
+            print(f"  Initial energy: {initial_energy:.6f} MeV")
+            print(f"  Deposited energy: {deposited_energy:.6f} MeV")
+            print(f"  Escaped energy: {escaped:.6f} MeV")
+
         self._last_stats = CondensedHistoryMultiParticleStats(
             escaped_photon_energy_MeV=float(escaped),
             annihilations=int(annihilations),
             brems_photons=int(brems_photons),
             delta_electrons=int(delta_electrons),
+            initial_energy_MeV=initial_energy,
+            deposited_energy_MeV=deposited_energy,
+            energy_balance_error_MeV=energy_balance_error,
+            energy_balance_error_percent=energy_balance_error_percent,
         )
         return edep
 
@@ -251,13 +286,6 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         for step_num in range(max_steps):
             step_start_time = time.time() if enable_timing else None
 
-            # Reset secondary output flags for this step
-            photon_alive.zero_()
-            secondary_alive.zero_()
-            if particle_type_val == 1:
-                ann_photon1_alive.zero_()
-                ann_photon2_alive.zero_()
-            
             # cutoff deposit
             below = (E > 0) & (E < photon_cut_MeV) & (w > 0)
             if torch.any(below):
@@ -278,7 +306,13 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
             ebin = torch.bucketize(E, self.tables.e_edges_MeV) - 1
             ebin = torch.clamp(ebin, 0, ECOUNT - 1).to(torch.int32)
 
-            grid = (triton.cdiv(N, 256),)
+            block_size, grid_size = get_optimal_kernel_config(
+                data_size=N,
+                device=self.device,
+                shared_mem_required=self.tables.sigma_max.numel() * 4,
+                register_pressure=64
+            )
+            grid = (grid_size,)
             photon_woodcock_flight_kernel_philox[grid](
                 pos, direction, E, w,
                 seed,
@@ -302,13 +336,31 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                 escaped_energy = escaped_energy + (E2[escaped_mask] * w2[escaped_mask]).sum(dtype=torch.float32)
                 E2 = torch.where(escaped_mask, torch.zeros_like(E2), E2)
                 w2 = torch.where(escaped_mask, torch.zeros_like(w2), w2)
+                alive = torch.where(escaped_mask, torch.zeros_like(alive), alive)
+
+            # Explicit boundary check: ensure particles are within geometry bounds
+            pos_z = pos2[:, 0]
+            pos_y = pos2[:, 1]
+            pos_x = pos2[:, 2]
+            boundary_mask = (pos_z >= 0) & (pos_z < Z * vz) & (pos_y >= 0) & (pos_y < Y * vy) & (pos_x >= 0) & (pos_x < X * vx)
+            outside_mask = (alive > 0) & (~boundary_mask)
+            if torch.any(outside_mask):
+                escaped_energy = escaped_energy + (E2[outside_mask] * w2[outside_mask]).sum(dtype=torch.float32)
+                E2 = torch.where(outside_mask, torch.zeros_like(E2), E2)
+                w2 = torch.where(outside_mask, torch.zeros_like(w2), w2)
+                alive = torch.where(outside_mask, torch.zeros_like(alive), alive)
+
+            # Only process interactions for particles that are still alive and inside geometry
+            alive_mask = (alive > 0) & (E2 > 0) & (w2 > 0)
+            if not torch.any(alive_mask):
+                continue
 
             # Use fused photon interaction kernel to combine classification and interaction
             photon_interaction_kernel[grid](
                 real,
                 pos2, dir2, E2, w2, ebin2,
                 material_id_flat, rho_flat, self.tables.ref_density_g_cm3,
-                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_rayleigh, self.tables.sigma_pair,
+                self.tables.sigma_photo, self.tables.sigma_compton, self.tables.sigma_pair,
                 compton_inv_cdf, K,
                 seed,
                 # outputs:
@@ -322,12 +374,12 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                 voxel_z_cm=float(vz), voxel_y_cm=float(vy), voxel_x_cm=float(vx),
             )
             
-            # Update photon state after interaction
-            pos2 = out_ph_pos
-            dir2 = out_ph_dir
-            E2 = out_ph_E
-            w2 = out_ph_w
-            ebin2 = out_ph_ebin
+            # Update photon state after interaction - copy data to avoid memory issues
+            pos2.copy_(out_ph_pos)
+            dir2.copy_(out_ph_dir)
+            E2.copy_(out_ph_E)
+            w2.copy_(out_ph_w)
+            ebin2.copy_(out_ph_ebin)
 
             # Process photoelectric electrons: photon absorbed, electron produced
             # Identify photoelectric events: photon energy zeroed, electron energy > 0
@@ -341,6 +393,8 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         max_per_step=max_secondaries_per_step,
                     )
                     if int(idx.numel()) > 0:
+                        # Update secondary counts for selected particles
+                        sec_counts[idx] += 1
                         esc_e, nb_e, nd_e = self._run_electrons_inplace(
                             pos=out_e_pos.index_select(0, idx),
                             direction=out_e_dir.index_select(0, idx),
@@ -361,6 +415,9 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         Z=Z, Y=Y, X=X,
                         voxel_size_cm=self.voxel_size_cm,
                     )
+                    # Zero out electron energy after local deposit to ensure energy conservation
+                    out_e_E = torch.where(pe_mask, torch.zeros_like(out_e_E), out_e_E)
+                    out_e_w = torch.where(pe_mask, torch.zeros_like(out_e_w), out_e_w)
 
             # Process Compton recoil electrons: photon scattered, electron produced
             # Identify Compton events: both photon and electron have energy > 0
@@ -374,6 +431,8 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         max_per_step=max_secondaries_per_step,
                     )
                     if int(idx.numel()) > 0:
+                        # Update secondary counts for selected particles
+                        sec_counts[idx] += 1
                         esc_e, nb_e, nd_e = self._run_electrons_inplace(
                             pos=out_e_pos.index_select(0, idx),
                             direction=out_e_dir.index_select(0, idx),
@@ -394,6 +453,9 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         Z=Z, Y=Y, X=X,
                         voxel_size_cm=self.voxel_size_cm,
                     )
+                    # Zero out electron energy after local deposit to ensure energy conservation
+                    out_e_E = torch.where(compton_mask, torch.zeros_like(out_e_E), out_e_E)
+                    out_e_w = torch.where(compton_mask, torch.zeros_like(out_e_w), out_e_w)
 
             # Process pair production: photon converted to electron-positron pair
             # Identify pair production events: photon energy zeroed, both electron and positron have energy > 0
@@ -407,6 +469,8 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         max_per_step=max_secondaries_per_step,
                     )
                     if int(idx.numel()) > 0:
+                        # Update secondary counts for selected particles (pair production creates 2 secondaries)
+                        sec_counts[idx] += 2
                         esc_e, nb_e, nd_e = self._run_electrons_inplace(
                             pos=out_e_pos.index_select(0, idx),
                             direction=out_e_dir.index_select(0, idx),
@@ -448,6 +512,11 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         Z=Z, Y=Y, X=X,
                         voxel_size_cm=self.voxel_size_cm,
                     )
+                    # Zero out electron and positron energy after local deposit to ensure energy conservation
+                    out_e_E = torch.where(pair_mask, torch.zeros_like(out_e_E), out_e_E)
+                    out_e_w = torch.where(pair_mask, torch.zeros_like(out_e_w), out_e_w)
+                    out_po_E = torch.where(pair_mask, torch.zeros_like(out_po_E), out_po_E)
+                    out_po_w = torch.where(pair_mask, torch.zeros_like(out_po_w), out_po_w)
 
             pos, direction, E, w = pos2, dir2, E2, w2
             
@@ -492,6 +561,12 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         max_steps = int(self.sim_config.get("electron_transport", {}).get("max_steps", 4096))
         et = self.sim_config.get("electron_transport", {})
         f_range = float(et.get("f_range", 0.2))
+        print(f"DEBUG: f_range = {f_range}, enable_range_cutoff = {et.get('enable_range_cutoff', True)}")
+
+        # Secondary particle energy thresholds
+        secondary_thresholds = et.get("secondary_energy_thresholds", {})
+        secondary_brem_threshold_MeV = float(secondary_thresholds.get("brems_photon_keV", 10.0)) * 1e-3
+        secondary_delta_threshold_MeV = float(secondary_thresholds.get("delta_ray_keV", 1.0)) * 1e-3
 
         # Convert to Structure of Arrays format for modern kernel
         particle_pos_x = pos[:, 2].contiguous()  # x
@@ -531,11 +606,32 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         material_Z = self._prepare_material_Z_table()
 
         # Load physics tables (convert to proper format if needed)
-        S_restricted_table = self._prepare_table_2d(self.tables.S_restricted, num_materials, num_energy_bins)
-        range_cdsa_table = self._prepare_table_2d(self.tables.range_csda_cm, num_materials, num_energy_bins)
-        P_brem_table = self._prepare_table_2d(self.tables.P_brem_per_cm, num_materials, num_energy_bins)
-        P_delta_table = self._prepare_table_2d(self.tables.P_delta_per_cm, num_materials, num_energy_bins)
+        # The kernel expects flattened 1D arrays with layout: [mat0_bin0, mat0_bin1, ..., mat0_binN, mat1_bin0, ...]
+        S_restricted_table = self._prepare_table_2d(self.tables.S_restricted, num_materials, num_energy_bins).flatten()
+        range_cdsa_table = self._prepare_table_2d(self.tables.range_csda_cm, num_materials, num_energy_bins).flatten()
+        P_brem_table = self._prepare_table_2d(self.tables.P_brem_per_cm, num_materials, num_energy_bins).flatten()
+        P_delta_table = self._prepare_table_2d(self.tables.P_delta_per_cm, num_materials, num_energy_bins).flatten()
         energy_bin_edges = self.tables.e_edges_MeV.contiguous()
+
+        # Prepare inverse CDF tables for energy sampling
+        brem_inv_cdf_table = self._prepare_inv_cdf_table(self.tables.brem_inv_cdf_Efrac, num_energy_bins)
+        delta_inv_cdf_table = self._prepare_inv_cdf_table(self.tables.delta_inv_cdf_Efrac, num_energy_bins)
+
+        # Initialize range tracking for range-based cutoff
+        enable_range_cutoff = bool(et.get("enable_range_cutoff", True))
+        particle_range_remaining = torch.zeros(N, dtype=torch.float32, device=self.device)
+        
+        if enable_range_cutoff:
+            # Initialize remaining range with full CSDA range for each particle
+            # Get energy bin for each particle
+            e_indices = torch.searchsorted(energy_bin_edges, particle_E, right=True) - 1
+            e_indices = torch.clamp(e_indices, 0, num_energy_bins - 1)
+            
+            # Get CSDA range from table
+            range_indices = particle_material * num_energy_bins + e_indices
+            particle_range_remaining = range_cdsa_table[range_indices].clone()
+        else:
+            particle_range_remaining = torch.full((N,), float('inf'), dtype=torch.float32, device=self.device)
 
         # Prepare output arrays for modern kernel
         new_particle_E = torch.empty_like(particle_E)
@@ -561,6 +657,7 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         ann_photon1_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon1_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon1_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon1_E = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon1_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
 
         ann_photon2_pos_x = torch.zeros(N, dtype=torch.float32, device=self.device)
@@ -569,6 +666,7 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
         ann_photon2_dir_x = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon2_dir_y = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon2_dir_z = torch.zeros(N, dtype=torch.float32, device=self.device)
+        ann_photon2_E = torch.zeros(N, dtype=torch.float32, device=self.device)
         ann_photon2_alive = torch.zeros(N, dtype=torch.int8, device=self.device)
 
         # Secondary electrons/positrons
@@ -652,10 +750,14 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                 particle_pos_x, particle_pos_y, particle_pos_z,
                 particle_dir_x, particle_dir_y, particle_dir_z,
                 particle_E, particle_weight, particle_type, particle_material, particle_alive,
+                # Range tracking for range-based cutoff
+                particle_range_remaining,
                 # RNG seed (stateless Philox)
                 seed,
                 # Physics tables
                 material_Z, S_restricted_table, range_cdsa_table, P_brem_table, P_delta_table,
+                # Inverse CDF tables for energy sampling
+                brem_inv_cdf_table, delta_inv_cdf_table,
                 # Energy binning
                 energy_bin_edges,
                 # Outputs for secondaries
@@ -665,10 +767,10 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                 # Annihilation photons (won't be used for electrons)
                 ann_photon1_pos_x, ann_photon1_pos_y, ann_photon1_pos_z,
                 ann_photon1_dir_x, ann_photon1_dir_y, ann_photon1_dir_z,
-                ann_photon1_alive,
+                ann_photon1_E, ann_photon1_alive,
                 ann_photon2_pos_x, ann_photon2_pos_y, ann_photon2_pos_z,
                 ann_photon2_dir_x, ann_photon2_dir_y, ann_photon2_dir_z,
-                ann_photon2_alive,
+                ann_photon2_E, ann_photon2_alive,
                 # Secondary particles
                 secondary_pos_x, secondary_pos_y, secondary_pos_z,
                 secondary_dir_x, secondary_dir_y, secondary_dir_z,
@@ -680,7 +782,9 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                 # Parameters
                 voxel_size_x_cm=float(vx), voxel_size_y_cm=float(vy), voxel_size_z_cm=float(vz),
                 num_materials=num_materials, num_energy_bins=num_energy_bins,
-                e_cut_MeV=e_cut, f_range=f_range,
+                e_cut_MeV=e_cut, f_range=f_range, enable_range_cutoff=enable_range_cutoff,
+                secondary_brem_threshold_MeV=secondary_brem_threshold_MeV,
+                secondary_delta_threshold_MeV=secondary_delta_threshold_MeV,
                 Z=Z, Y=Y, X=X,
                 N=N,
                 # Physics constants
@@ -789,6 +893,8 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
                         Z=Z, Y=Y, X=X,
                         voxel_size_cm=self.voxel_size_cm,
                     )
+                    # Zero out delta electron energy after local deposit to ensure energy conservation
+                    secondary_E = torch.where(delta_mask, torch.zeros_like(secondary_E), secondary_E)
             # Update particle state
             particle_E = new_particle_E
             particle_alive = new_particle_alive
@@ -857,25 +963,24 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
 
     def _prepare_material_Z_table(self):
         """Prepare material atomic number table for unified kernel."""
-        if hasattr(self.mats, 'lib') and self.mats.lib is not None:
-            from gpumcrpt.materials.hu_materials import compute_material_effective_atom_Z
-            z_table = compute_material_effective_atom_Z(self.mats.lib)
-            
-            # Ensure table has entries for all possible material IDs in the volume
-            max_material_id = int(torch.max(self.mats.material_id).item())
-            if z_table.numel() <= max_material_id:
-                # Pad with bone Z value (approx 12.01) for missing materials
-                padding = max(0, int(max_material_id - z_table.numel() + 1))
-                bone_z = 12.01
-                z_table = torch.cat([z_table, torch.full((padding,), bone_z, dtype=z_table.dtype, device=z_table.device)])
-            return z_table
-        else:
-            # Fallback: use approximate Z values with enough entries
-            max_material_id = int(torch.max(self.mats.material_id).item())
-            default_z_values = [7.42, 6.60, 6.26, 7.42, 12.01, 12.01, 12.01]  # Air, Lung, Fat, Muscle, Bone, Bone, Bone
-            if len(default_z_values) <= max_material_id:
-                default_z_values.extend([12.01] * (max_material_id - len(default_z_values) + 1))
-            return torch.tensor(default_z_values[:max_material_id+1], dtype=torch.float32, device=self.device)
+        if not (hasattr(self.mats, 'lib') and self.mats.lib is not None):
+            raise ValueError(
+                "Material library (mats.lib) is required for accurate charged particle transport. "
+                "Please ensure the material library is properly loaded."
+            )
+        
+        from gpumcrpt.materials.hu_materials import compute_material_effective_atom_Z
+        z_table = compute_material_effective_atom_Z(self.mats.lib)
+        
+        # Ensure table has entries for all possible material IDs in the volume
+        max_material_id = int(torch.max(self.mats.material_id).item())
+        if z_table.numel() <= max_material_id:
+            raise ValueError(
+                f"Material library has insufficient entries. "
+                f"Required: {max_material_id + 1}, Available: {z_table.numel()}"
+            )
+        
+        return z_table
 
     def _prepare_table_2d(self, table, num_materials, num_energy_bins):
         """Prepare a 2D physics table for the unified kernel."""
@@ -906,6 +1011,33 @@ class TritonPhotonElectronCondensedEngine(BaseTransportEngine):
             else:
                 # Truncate if too large
                 table = table[:num_materials, :num_energy_bins]
+
+        return table.contiguous()
+
+    def _prepare_inv_cdf_table(self, table, num_energy_bins):
+        """Prepare an inverse CDF table for energy sampling (1D array per energy bin)."""
+        if table is None:
+            return torch.zeros((num_energy_bins, 1), dtype=torch.float32, device=self.device)
+
+        if isinstance(table, (list, tuple)):
+            table = torch.tensor(table, dtype=torch.float32, device=self.device)
+
+        # Ensure proper shape: [num_energy_bins, K] where K is the number of samples
+        if table.dim() == 1:
+            # Expand to 2D
+            table = table.unsqueeze(1)
+        elif table.dim() == 2:
+            # Ensure correct dimensions
+            if table.shape[0] < num_energy_bins:
+                # Pad with zeros for missing energy bins
+                padding_rows = num_energy_bins - table.shape[0]
+                padding = torch.zeros((padding_rows, table.shape[1]), dtype=table.dtype, device=table.device)
+                table = torch.cat([table, padding], dim=0)
+            elif table.shape[0] > num_energy_bins:
+                # Truncate if too large
+                table = table[:num_energy_bins, :]
+        else:
+            raise ValueError(f"Invalid table shape {table.shape}, expected 1D or 2D")
 
         return table.contiguous()
 

@@ -8,7 +8,7 @@ class LocalDepositOnlyTransportEngine:
 
     Current behavior: deposit all particle kinetic energy locally in the voxel where it was born.
 
-    This is intentionally simple to unblock Milestone 1 (runnable MVP). It should be
+    This is intentionally simple to unblock Milestone 1 (runnable implementation). It should be
     replaced by the real wavefront/Triton transport engine in later milestones.
     """
 
