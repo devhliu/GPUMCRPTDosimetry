@@ -79,7 +79,7 @@ class TritonPhotonEMEnergyBucketedGraphsEngine(BaseTransportEngine):
 
         self.cfg = cfg or BucketedGraphConfig()
         if self.cfg.bucket_sizes is None:
-            self.cfg.bucket_sizes = [4096, 16384, 65536, 262144, 1048576]
+            self.cfg.bucket_sizes = [4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
 
         self.M = len(self.tables.material_names)
         self.ECOUNT = int(self.tables.e_edges_MeV.numel() - 1)

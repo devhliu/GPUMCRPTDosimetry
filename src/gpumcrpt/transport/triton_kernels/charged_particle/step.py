@@ -693,6 +693,99 @@ def _sample_bethe_heitler_energy(u1: tl.float32, u2: tl.float32, u3: tl.float32,
 
 
 @triton.jit
+def _sample_bhabha_delta_energy(u1: tl.float32, u2: tl.float32, u3: tl.float32, u4: tl.float32, u5: tl.float32,
+                                 u6: tl.float32, u7: tl.float32, u8: tl.float32, u9: tl.float32,
+                                 E_initial: tl.float32, Z_material: tl.float32,
+                                 ELECTRON_REST_MASS_MEV: tl.constexpr) -> tl.float32:
+    """
+    Sample delta ray energy using Bhabha scattering (e+ + e- -> e+ + e-).
+    
+    Bhabha scattering differs from Moller in the cross-section formula due to
+    exchange diagrams between identical particles.
+    
+    Bhabha differential cross-section:
+        dσ/dε ∝ [1/ε² - B₁/ε + B₂] 
+    where ε = T/E_initial and B₁, B₂ depend on γ (Lorentz factor)
+    
+    Args:
+        u1-u9: Uniform random numbers [0,1]
+        E_initial: Initial positron kinetic energy (MeV)
+        Z_material: Atomic number of material
+        ELECTRON_REST_MASS_MEV: Electron rest mass in MeV
+    
+    Returns:
+        delta_energy: Sampled knock-on electron energy (MeV)
+    
+    Reference:
+        Bhabha, Proc. R. Soc. A (1936)
+        EGSnrc PIRS-701
+    """
+    # Calculate relativistic parameters
+    total_energy = E_initial + ELECTRON_REST_MASS_MEV
+    gamma = total_energy / ELECTRON_REST_MASS_MEV
+    gamma_sq = gamma * gamma
+    beta_sq = tl.maximum(0.0, 1.0 - 1.0 / gamma_sq)
+    
+    # Maximum energy transfer for positron-electron scattering
+    # Unlike Moller, positron can transfer all its kinetic energy
+    T_max = E_initial
+    T_min = 0.001  # 1 keV minimum
+    
+    # Bhabha coefficients (different from Moller)
+    y = 1.0 / (gamma + 1.0)
+    y_sq = y * y
+    y_cu = y_sq * y
+    y_qu = y_cu * y
+    
+    # Bhabha formula coefficients
+    B1 = 2.0 - y_sq
+    B2 = 1.0 - 2.0 * y + 3.0 * y_sq - 2.0 * y_cu + y_qu
+    B3 = 1.0 - 2.0 * y + y_sq
+    B4 = y_sq * (1.0 - 2.0 * y + y_sq)
+    
+    # Rejection sampling envelope
+    eps_min = T_min / E_initial
+    eps_max = T_max / E_initial
+    
+    # Maximum of cross-section at eps_min
+    f_max = 1.0 / (eps_min * eps_min) - B1 / eps_min + B2 - B3 * eps_min + B4 * eps_min * eps_min
+    f_max = tl.maximum(f_max, 0.1)  # Safety bound
+    
+    # First attempt
+    eps = eps_min + u1 * (eps_max - eps_min)
+    f_eps = 1.0 / (eps * eps) - B1 / eps + B2 - B3 * eps + B4 * eps * eps
+    accept = u2 * f_max < f_eps
+    
+    # Second attempt
+    eps2 = eps_min + u3 * (eps_max - eps_min)
+    f_eps2 = 1.0 / (eps2 * eps2) - B1 / eps2 + B2 - B3 * eps2 + B4 * eps2 * eps2
+    accept2 = u4 * f_max < f_eps2
+    
+    # Third attempt
+    eps3 = eps_min + u5 * (eps_max - eps_min)
+    f_eps3 = 1.0 / (eps3 * eps3) - B1 / eps3 + B2 - B3 * eps3 + B4 * eps3 * eps3
+    accept3 = u6 * f_max < f_eps3
+    
+    # Fourth attempt
+    eps4 = eps_min + u7 * (eps_max - eps_min)
+    f_eps4 = 1.0 / (eps4 * eps4) - B1 / eps4 + B2 - B3 * eps4 + B4 * eps4 * eps4
+    accept4 = u8 * f_max < f_eps4
+    
+    # Fifth attempt (fallback)
+    eps5 = eps_min + u9 * (eps_max - eps_min)
+    
+    # Select accepted value
+    eps_final = tl.where(accept, eps, tl.where(accept2, eps2, tl.where(accept3, eps3, tl.where(accept4, eps4, eps5))))
+    
+    # Convert back to energy
+    T_final = eps_final * E_initial
+    
+    return T_final
+
+
+
+
+@triton.jit
 def _sample_moller_delta_energy(u1: tl.float32, u2: tl.float32, u3: tl.float32, u4: tl.float32, u5: tl.float32,
                                   u6: tl.float32, u7: tl.float32, u8: tl.float32, u9: tl.float32,
                                   E_initial: tl.float32, Z_material: tl.float32,

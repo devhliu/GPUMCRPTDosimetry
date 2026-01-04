@@ -12,7 +12,6 @@ from gpumcrpt.transport.utils.secondary_budget import allow_secondaries, select_
 # Photon kernels
 from gpumcrpt.transport.triton_kernels.photon.flight import photon_woodcock_flight_kernel_philox
 from gpumcrpt.transport.triton_kernels.photon.interactions import photon_interaction_kernel
-from gpumcrpt.transport.triton_kernels.photon.compton import photon_compton_kernel
 
 # High-performance unified charged particle kernels
 from gpumcrpt.transport.triton_kernels.charged_particle import (
